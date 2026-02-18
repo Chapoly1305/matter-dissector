@@ -119,59 +119,54 @@ static int hf_DataElem_PropertyData = -1;
 
 namespace
 {
-constexpr uint32_t kClusterId_OnOff = 0x00000006;
+struct ClusterNameEntry
+{
+    uint32_t clusterId;
+    const char *name;
+};
+
+struct ScopedNameEntry
+{
+    uint32_t clusterId;
+    uint32_t id;
+    const char *name;
+};
+
+#include "im_name_tables.inc"
 
 const char * GetClusterNameById(uint32_t clusterId)
 {
-    switch (clusterId)
-    {
-    case kClusterId_OnOff:
-        return "OnOff";
-    default:
-        return nullptr;
+    for (const auto & entry : kClusterNameTable) {
+        if (entry.clusterId == clusterId) {
+            return entry.name;
+        }
     }
+    return nullptr;
+}
+
+const char * FindScopedName(const ScopedNameEntry *table, size_t tableSize, uint32_t clusterId, uint32_t id)
+{
+    for (size_t i = 0; i < tableSize; i++) {
+        if (table[i].clusterId == clusterId && table[i].id == id) {
+            return table[i].name;
+        }
+    }
+    return nullptr;
 }
 
 const char * GetCommandNameById(uint32_t clusterId, uint32_t commandId)
 {
-    if (clusterId == kClusterId_OnOff)
-    {
-        switch (commandId)
-        {
-        case 0x00: return "Off";
-        case 0x01: return "On";
-        case 0x02: return "Toggle";
-        case 0x40: return "OffWithEffect";
-        case 0x41: return "OnWithRecallGlobalScene";
-        case 0x42: return "OnWithTimedOff";
-        default: return nullptr;
-        }
-    }
-    return nullptr;
+    return FindScopedName(kCommandNameTable, array_length(kCommandNameTable), clusterId, commandId);
 }
 
 const char * GetAttributeNameById(uint32_t clusterId, uint32_t attributeId)
 {
-    if (clusterId == kClusterId_OnOff)
-    {
-        switch (attributeId)
-        {
-        case 0x0000: return "OnOff";
-        case 0x4000: return "GlobalSceneControl";
-        case 0x4001: return "OnTime";
-        case 0x4002: return "OffWaitTime";
-        case 0x4003: return "StartUpOnOff";
-        default: return nullptr;
-        }
-    }
-    return nullptr;
+    return FindScopedName(kAttributeNameTable, array_length(kAttributeNameTable), clusterId, attributeId);
 }
 
 const char * GetEventNameById(uint32_t clusterId, uint32_t eventId)
 {
-    (void) clusterId;
-    (void) eventId;
-    return nullptr;
+    return FindScopedName(kEventNameTable, array_length(kEventNameTable), clusterId, eventId);
 }
 
 enum class PathKind

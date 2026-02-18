@@ -35,9 +35,14 @@ The Matter Wireshark dissector recognizes protocol opcodes for many of the curre
     - [X] Attribute Write
     - [X] Subscribe
     - [X] Events
+- [X] IM path name mapping for Matter v1.5 clusters
+    - [X] Cluster ID -> Name
+    - [X] Attribute ID -> Name
+    - [X] Command ID -> Name
+    - [X] Event ID -> Name
 - Cluster Support
     - [X] User Directed Commissioning [UDC]
-    - [ ] On/Off
+    - [X] On/Off (path-level ID/name decode in IM)
     ...
 ### Security Features
 
