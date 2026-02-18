@@ -640,6 +640,122 @@ static MATTER_ERROR AddAttributeReportIBItem(TLVDissector & tlvDissector, proto_
 exit:
     return err;
 }
+
+static MATTER_ERROR ExtractCommandPathIds(TLVDissector & tlvDissector, uint32_t & clusterId, uint32_t & commandId, bool & found)
+{
+    MATTER_ERROR err = MATTER_NO_ERROR;
+    bool hasCluster = false;
+    bool hasCommand = false;
+    uint32_t localCluster = 0;
+    uint32_t localCommand = 0;
+
+    VerifyOrExit(tlvDissector.GetType() == kTLVType_Path || tlvDissector.GetType() == kTLVType_Structure,
+                 err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+    err = tlvDissector.EnterContainer();
+    SuccessOrExit(err);
+
+    while (true) {
+        err = tlvDissector.Next();
+        if (err == MATTER_END_OF_TLV) {
+            err = MATTER_NO_ERROR;
+            break;
+        }
+        SuccessOrExit(err);
+
+        if (!IsContextTag(tlvDissector.GetTag()) || tlvDissector.GetType() != kTLVType_UnsignedInteger) {
+            continue;
+        }
+
+        uint64_t v = 0;
+        err = tlvDissector.Get(v);
+        SuccessOrExit(err);
+
+        switch (TagNumFromTag(tlvDissector.GetTag())) {
+        case 1:
+            localCluster = static_cast<uint32_t>(v);
+            hasCluster = true;
+            break;
+        case 2:
+            localCommand = static_cast<uint32_t>(v);
+            hasCommand = true;
+            break;
+        default:
+            break;
+        }
+    }
+
+    err = tlvDissector.ExitContainer();
+    SuccessOrExit(err);
+
+    if (hasCluster && hasCommand) {
+        clusterId = localCluster;
+        commandId = localCommand;
+        found = true;
+    }
+
+exit:
+    return err;
+}
+
+static MATTER_ERROR AddOnOffCommandPayload(TLVDissector & tlvDissector, proto_tree * tree, tvbuff_t * tvb, uint32_t commandId)
+{
+    MATTER_ERROR err = MATTER_NO_ERROR;
+    proto_tree *argTree = nullptr;
+
+    VerifyOrExit(tlvDissector.GetType() == kTLVType_Structure, err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+    err = tlvDissector.AddSubTreeItem(tree, hf_CommandRequest_Argument, ett_DataElem, tvb, argTree);
+    SuccessOrExit(err);
+
+    err = tlvDissector.EnterContainer();
+    SuccessOrExit(err);
+
+    if (commandId == 0x00000000 || commandId == 0x00000001 || commandId == 0x00000002 || commandId == 0x00000041) {
+        err = tlvDissector.AddStringItemF(argTree, hf_ImCommon_Unknown, tvb, "No arguments");
+        SuccessOrExit(err);
+    }
+
+    while (true) {
+        err = tlvDissector.Next();
+        if (err == MATTER_END_OF_TLV) {
+            err = MATTER_NO_ERROR;
+            break;
+        }
+        SuccessOrExit(err);
+
+        if (!IsContextTag(tlvDissector.GetTag()) || tlvDissector.GetType() != kTLVType_UnsignedInteger) {
+            err = tlvDissector.AddGenericTLVItem(argTree, hf_ImCommon_Unknown, tvb, false);
+            SuccessOrExit(err);
+            continue;
+        }
+
+        uint64_t v = 0;
+        err = tlvDissector.Get(v);
+        SuccessOrExit(err);
+        uint32_t t = TagNumFromTag(tlvDissector.GetTag());
+
+        if (commandId == 0x00000040) {
+            if (t == 0) err = tlvDissector.AddStringItemF(argTree, hf_ImCommon_Unknown, tvb, "EffectIdentifier=%llu", (unsigned long long) v);
+            else if (t == 1) err = tlvDissector.AddStringItemF(argTree, hf_ImCommon_Unknown, tvb, "EffectVariant=%llu", (unsigned long long) v);
+            else err = tlvDissector.AddGenericTLVItem(argTree, hf_ImCommon_Unknown, tvb, false);
+        }
+        else if (commandId == 0x00000042) {
+            if (t == 0) err = tlvDissector.AddStringItemF(argTree, hf_ImCommon_Unknown, tvb, "OnOffControl=0x%llX", (unsigned long long) v);
+            else if (t == 1) err = tlvDissector.AddStringItemF(argTree, hf_ImCommon_Unknown, tvb, "OnTime=%llu", (unsigned long long) v);
+            else if (t == 2) err = tlvDissector.AddStringItemF(argTree, hf_ImCommon_Unknown, tvb, "OffWaitTime=%llu", (unsigned long long) v);
+            else err = tlvDissector.AddGenericTLVItem(argTree, hf_ImCommon_Unknown, tvb, false);
+        }
+        else {
+            err = tlvDissector.AddGenericTLVItem(argTree, hf_ImCommon_Unknown, tvb, false);
+        }
+        SuccessOrExit(err);
+    }
+
+    err = tlvDissector.ExitContainer();
+    SuccessOrExit(err);
+
+exit:
+    return err;
+}
 } // namespace
 
 void AssociateWithIMSubscription(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, MatterMessageRecord *msgRec)
@@ -717,6 +833,9 @@ AddCommandDataIB(TLVDissector& tlvDissector, proto_tree *tree, tvbuff_t* tvb)
 {
     MATTER_ERROR err;
     proto_tree *dataElemTree;
+    bool haveCommandPath = false;
+    uint32_t commandClusterId = 0;
+    uint32_t commandId = 0;
 
     err = tlvDissector.AddSubTreeItem(tree, hf_CommandDataIB, ett_CommandElem, tvb, dataElemTree);
     SuccessOrExit(err);
@@ -740,11 +859,18 @@ AddCommandDataIB(TLVDissector& tlvDissector, proto_tree *tree, tvbuff_t* tvb)
         switch (tag) {
         case CommandDataIB::kTag_Path:
             VerifyOrExit(type == kTLVType_Path || type == kTLVType_Structure, err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+            err = ExtractCommandPathIds(tlvDissector, commandClusterId, commandId, haveCommandPath);
+            SuccessOrExit(err);
             err = AddNamedPathItem(tlvDissector, dataElemTree, tvb, PathKind::Command);
             SuccessOrExit(err);
             break;
         case CommandDataIB::kTag_Data:
-            err = tlvDissector.AddGenericTLVItem(dataElemTree, hf_DataElem_PropertyData, tvb, true);
+            if (haveCommandPath && commandClusterId == 0x00000006 && type == kTLVType_Structure) {
+                err = AddOnOffCommandPayload(tlvDissector, dataElemTree, tvb, commandId);
+            }
+            else {
+                err = tlvDissector.AddGenericTLVItem(dataElemTree, hf_DataElem_PropertyData, tvb, true);
+            }
             SuccessOrExit(err);
             break;
         default:

@@ -31,7 +31,7 @@ Legend:
 ### OnOff (`0x00000006`)
 - [x] Path decode
 - [ ] Attribute payload
-- [ ] Command payload
+- [x] Command payload
 - [ ] Event payload
 
 ### LevelControl (`0x00000008`)
