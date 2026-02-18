@@ -9,6 +9,7 @@
  */
 
 #include <glib.h>
+#include <stddef.h>
 #include "config.h"
 
 #include <epan/packet.h>
@@ -34,14 +35,24 @@ using namespace matter::Profiles::Security;
 
 extern void AssociateWithIMSubscription(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, MatterMessageRecord *msgRec);
 
+static const value_string kPaseErrorCodeNames[] = {
+    { 0x01, "NoSharedTrustRoots" },
+    { 0x02, "InvalidParameter" },
+    { 0, NULL },
+};
+
 static int proto_MatterCommon = -1;
 
 static int ett_MatterCommon = -1;
+static int ett_SessionParameters = -1;
+static int ett_PBKDFParameters = -1;
+static int ett_SessionEncrypted = -1;
 
 static int hf_StatusReport_ProfileId = -1;
 static int hf_StatusReport_StatusCode = -1;
 static int hf_StatusReport_TLV = -1;
 static int hf_StatusReport_IsError = -1;
+static int hf_CheckIn_Payload = -1;
 
 //static int ett_PBKDFParamRequest = -1;
 
@@ -50,8 +61,12 @@ static int hf_PBKDFParamRequest_initiatorRandom = -1;
 static int hf_PBKDFParamRequest_localSessionId = -1;
 static int hf_PBKDFParamRequest_passcodeId = -1;
 static int hf_PBKDFParamRequest_hasPbkdfParams = -1;
+static int hf_PBKDFParamRequest_mrpParams = -1;
 
 static int hf_PBKDFParamResponse_responderRandom = -1;
+static int hf_PBKDFParamResponse_responderSessionId = -1;
+static int hf_PBKDFParamResponse_pbkdfParameters = -1;
+static int hf_PBKDFParamResponse_mrpParams = -1;
 static int hf_PBKDFParamResponse_pbkdfIterationCount = -1;
 static int hf_PBKDFParamResponse_pbkdfSaltLength = -1;
 static int hf_PBKDFParamResponse_pbkdfSalt = -1;
@@ -60,10 +75,27 @@ static int hf_Pake1_pA = -1;
 static int hf_Pake2_pB = -1;
 static int hf_Pake2_cB = -1;
 static int hf_Pake3_cA = -1;
+static int hf_PakeError_Code = -1;
+static int hf_PakeError_UnknownData = -1;
 
 static int hf_Session_destinationId = -1;
 static int hf_Session_ephPublicKey = -1;
 static int hf_Session_encrypted = -1;
+static int hf_Session_encrypted2 = -1;
+static int hf_Session_encrypted3 = -1;
+static int hf_Session_encryptedCiphertext = -1;
+static int hf_Session_encryptedMic = -1;
+static int hf_Session_resumptionId = -1;
+static int hf_Session_resumeMic = -1;
+static int hf_Session_sleepyParams = -1;
+static int hf_Session_idleRetransTimeout = -1;
+static int hf_Session_activeRetransTimeout = -1;
+static int hf_Session_activeThreshold = -1;
+static int hf_Session_dataModelRevision = -1;
+static int hf_Session_interactionModelRevision = -1;
+static int hf_Session_specificationVersion = -1;
+static int hf_Session_maxPathsPerInvoke = -1;
+static int hf_Session_unknownParam = -1;
 
 static int
 DissectStatusReport(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, const MatterMessageInfo& msgInfo)
@@ -137,6 +169,157 @@ DissectStandaloneAck(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, co
     AssociateWithIMSubscription(tvb, pinfo, tree, msgInfo.msgRec);
 
     return 1;
+}
+
+namespace SessionParametersTag
+{
+enum
+{
+    kSessionIdleInterval      = 1,
+    kSessionActiveInterval    = 2,
+    kSessionActiveThreshold   = 3,
+    kDataModelRevision        = 4,
+    kInteractionModelRevision = 5,
+    kSpecificationVersion     = 6,
+    kMaxPathsPerInvoke        = 7,
+};
+}
+
+static MATTER_ERROR
+AddSessionParameters(TLVDissector & tlvDissector, proto_tree * tree, tvbuff_t * tvb, int containerHf)
+{
+    MATTER_ERROR err;
+    proto_tree * paramsTree;
+
+    VerifyOrExit(tlvDissector.GetType() == kTLVType_Structure, err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+    err = tlvDissector.AddSubTreeItem(tree, containerHf, ett_SessionParameters, tvb, paramsTree);
+    SuccessOrExit(err);
+
+    err = tlvDissector.EnterContainer();
+    SuccessOrExit(err);
+
+    while (true) {
+        err = tlvDissector.Next();
+        if (err == MATTER_END_OF_TLV)
+            break;
+        SuccessOrExit(err);
+
+        uint64_t tag = tlvDissector.GetTag();
+        VerifyOrExit(IsContextTag(tag), err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+
+        switch (TagNumFromTag(tag)) {
+        case SessionParametersTag::kSessionIdleInterval:
+            err = tlvDissector.AddTypedItem(paramsTree, hf_Session_idleRetransTimeout, tvb);
+            break;
+        case SessionParametersTag::kSessionActiveInterval:
+            err = tlvDissector.AddTypedItem(paramsTree, hf_Session_activeRetransTimeout, tvb);
+            break;
+        case SessionParametersTag::kSessionActiveThreshold:
+            err = tlvDissector.AddTypedItem(paramsTree, hf_Session_activeThreshold, tvb);
+            break;
+        case SessionParametersTag::kDataModelRevision:
+            err = tlvDissector.AddTypedItem(paramsTree, hf_Session_dataModelRevision, tvb);
+            break;
+        case SessionParametersTag::kInteractionModelRevision:
+            err = tlvDissector.AddTypedItem(paramsTree, hf_Session_interactionModelRevision, tvb);
+            break;
+        case SessionParametersTag::kSpecificationVersion:
+            err = tlvDissector.AddTypedItem(paramsTree, hf_Session_specificationVersion, tvb);
+            break;
+        case SessionParametersTag::kMaxPathsPerInvoke:
+            err = tlvDissector.AddTypedItem(paramsTree, hf_Session_maxPathsPerInvoke, tvb);
+            break;
+        default:
+            err = tlvDissector.AddGenericTLVItem(paramsTree, hf_Session_unknownParam, tvb, false);
+            break;
+        }
+        SuccessOrExit(err);
+    }
+
+    err = tlvDissector.ExitContainer();
+    SuccessOrExit(err);
+
+exit:
+    return err;
+}
+
+static MATTER_ERROR
+AddPBKDFParameterSet(TLVDissector & tlvDissector, proto_tree * tree, tvbuff_t * tvb)
+{
+    MATTER_ERROR err;
+    proto_tree * pbkdfTree;
+
+    VerifyOrExit(tlvDissector.GetType() == kTLVType_Structure, err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+    err = tlvDissector.AddSubTreeItem(tree, hf_PBKDFParamResponse_pbkdfParameters, ett_PBKDFParameters, tvb, pbkdfTree);
+    SuccessOrExit(err);
+
+    err = tlvDissector.EnterContainer();
+    SuccessOrExit(err);
+
+    while (true) {
+        err = tlvDissector.Next();
+        if (err == MATTER_END_OF_TLV)
+            break;
+        SuccessOrExit(err);
+
+        uint64_t tag = tlvDissector.GetTag();
+        VerifyOrExit(IsContextTag(tag), err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+
+        switch (TagNumFromTag(tag)) {
+        case 1:
+            err = tlvDissector.AddTypedItem(pbkdfTree, hf_PBKDFParamResponse_pbkdfIterationCount, tvb);
+            break;
+        case 2:
+            err = tlvDissector.AddTypedItem(pbkdfTree, hf_PBKDFParamResponse_pbkdfSalt, tvb);
+            break;
+        default:
+            err = tlvDissector.AddGenericTLVItem(pbkdfTree, hf_Session_unknownParam, tvb, false);
+            break;
+        }
+        SuccessOrExit(err);
+    }
+
+    err = tlvDissector.ExitContainer();
+    SuccessOrExit(err);
+
+exit:
+    return err;
+}
+
+static MATTER_ERROR
+AddEncryptedField(TLVDissector & tlvDissector, proto_tree * tree, tvbuff_t * tvb, const uint8_t * msgData, int containerHf)
+{
+    MATTER_ERROR err;
+    proto_tree * encryptedTree = nullptr;
+    const uint8_t * valuePtr   = nullptr;
+    uint32_t valueLen          = tlvDissector.GetLength();
+    ptrdiff_t ptrOffset        = 0;
+    int valueOffset            = 0;
+
+    err = tlvDissector.AddSubTreeItem(tree, containerHf, ett_SessionEncrypted, tvb, encryptedTree);
+    SuccessOrExit(err);
+
+    err = tlvDissector.GetDataPtr(valuePtr);
+    SuccessOrExit(err);
+
+    if (valueLen == 0) {
+        ExitNow(err = MATTER_NO_ERROR);
+    }
+
+    ptrOffset = valuePtr - msgData;
+    VerifyOrExit(ptrOffset >= 0, err = MATTER_ERROR_INVALID_ARGUMENT);
+    valueOffset = static_cast<int>(ptrOffset);
+
+    if (valueLen > 16) {
+        proto_tree_add_item(encryptedTree, hf_Session_encryptedCiphertext, tvb, valueOffset, valueLen - 16, ENC_NA);
+        proto_tree_add_item(encryptedTree, hf_Session_encryptedMic, tvb, valueOffset + static_cast<int>(valueLen - 16), 16, ENC_NA);
+    }
+    else {
+        proto_tree_add_item(encryptedTree, hf_Session_encryptedMic, tvb, valueOffset, valueLen, ENC_NA);
+    }
+
+exit:
+    return err;
 }
 
 /**
@@ -214,7 +397,8 @@ DissectPBKDFParamRequest(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_
             SuccessOrExit(err);
             break;
         case 5:
-            // TODO: add support for mrp-parameter-struct 
+            err = AddSessionParameters(tlvDissector, tree, tvb, hf_PBKDFParamRequest_mrpParams);
+            SuccessOrExit(err);
             break;
         default:
             ExitNow(err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
@@ -296,14 +480,16 @@ DissectPBKDFParamResponse(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U
             break;
         case 3:
             VerifyOrExit(type == kTLVType_UnsignedInteger, err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
-            err = tlvDissector.AddTypedItem(tree, hf_PBKDFParamRequest_localSessionId, tvb);
+            err = tlvDissector.AddTypedItem(tree, hf_PBKDFParamResponse_responderSessionId, tvb);
             SuccessOrExit(err);
             break;
         case 4:
-            // TODO: add support for Crypto_PBKDFParameterSet
+            err = AddPBKDFParameterSet(tlvDissector, tree, tvb);
+            SuccessOrExit(err);
             break;
         case 5:
-            // TODO: add support for mrp-parameter-struct 
+            err = AddSessionParameters(tlvDissector, tree, tvb, hf_PBKDFParamResponse_mrpParams);
+            SuccessOrExit(err);
             break;
         default:
             ExitNow(err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
@@ -503,9 +689,36 @@ sigma-error-enum => UNSIGNED INTEGER [ range 8bits ] {
 static int
 DissectPasePakeError(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, const MatterMessageInfo& msgInfo)
 {
+    uint8_t errorCode = 0;
+    const char * codeName = "Unknown";
+
     col_prepend_fstr(pinfo->cinfo, COL_INFO, "PASE Spake2 Err ");
     proto_item_append_text(proto_tree_get_parent(tree), ": PASE Spake2 Error");
-    return 1;
+
+    if (msgInfo.payloadLen >= 1) {
+        errorCode = tvb_get_uint8(tvb, 0);
+        codeName = val_to_str_const(errorCode, kPaseErrorCodeNames, "Unknown");
+        proto_tree_add_uint_format_value(tree, hf_PakeError_Code, tvb, 0, 1, errorCode, "0x%02X (%s)", errorCode, codeName);
+        col_append_fstr(pinfo->cinfo, COL_INFO, " [%s]", codeName);
+
+        if (msgInfo.payloadLen > 1) {
+            proto_tree_add_item(tree, hf_PakeError_UnknownData, tvb, 1, msgInfo.payloadLen - 1, ENC_NA);
+        }
+    }
+    return msgInfo.payloadLen;
+}
+
+static int
+DissectICDCheckIn(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, const MatterMessageInfo& msgInfo)
+{
+    proto_item_append_text(proto_tree_get_parent(tree), ": ICD Check-In");
+    col_prepend_fstr(pinfo->cinfo, COL_INFO, "ICD_CheckIn ");
+
+    if (msgInfo.payloadLen > 0) {
+        proto_tree_add_item(tree, hf_CheckIn_Payload, tvb, 0, msgInfo.payloadLen, ENC_NA);
+    }
+
+    return msgInfo.payloadLen;
 }
 
 
@@ -576,10 +789,17 @@ DissectCaseSigma1(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, const
             SuccessOrExit(err);
             break;
         case CASE::Sigma1::kTag_InitiatorSleepyParams:
+            err = AddSessionParameters(tlvDissector, tree, tvb, hf_Session_sleepyParams);
+            SuccessOrExit(err);
+            break;
         case CASE::Sigma1::kTag_ResumptionId:
+            VerifyOrExit(type == kTLVType_ByteString, err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+            err = tlvDissector.AddTypedItem(tree, hf_Session_resumptionId, tvb);
+            SuccessOrExit(err);
+            break;
         case CASE::Sigma1::kTag_InitiatorResumeMic:
-            // TODO: add support for optional fields
-            err = tlvDissector.AddGenericTLVItem(tree, hf_StatusReport_TLV, tvb, false);
+            VerifyOrExit(type == kTLVType_ByteString, err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+            err = tlvDissector.AddTypedItem(tree, hf_Session_resumeMic, tvb);
             SuccessOrExit(err);
             break;
 
@@ -656,12 +876,11 @@ DissectCaseSigma2(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, const
             break;
         case CASE::Sigma2::kTag_Encrypted2:
             VerifyOrExit(type == kTLVType_ByteString, err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
-            err = tlvDissector.AddTypedItem(tree, hf_Session_encrypted, tvb);
+            err = AddEncryptedField(tlvDissector, tree, tvb, msgData, hf_Session_encrypted2);
             SuccessOrExit(err);
             break;
         case CASE::Sigma2::kTag_ResponderSleepyParams:
-            // TODO: add support for optional fields
-            err = tlvDissector.AddGenericTLVItem(tree, hf_StatusReport_TLV, tvb, false);
+            err = AddSessionParameters(tlvDissector, tree, tvb, hf_Session_sleepyParams);
             SuccessOrExit(err);
             break;
 
@@ -719,7 +938,7 @@ DissectCaseSigma3(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, const
         switch (TagNumFromTag(tag)) {
         case CASE::Sigma3::kTag_Encrypted3:
             VerifyOrExit(type == kTLVType_ByteString, err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
-            err = tlvDissector.AddTypedItem(tree, hf_Session_encrypted, tvb);
+            err = AddEncryptedField(tlvDissector, tree, tvb, msgData, hf_Session_encrypted3);
             SuccessOrExit(err);
             break;
         default:
@@ -775,22 +994,30 @@ DissectCaseSigma2Resume(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_,
  
         VerifyOrExit(IsContextTag(tag), err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
 
-        err = tlvDissector.AddGenericTLVItem(tree, hf_StatusReport_TLV, tvb, false);
-        SuccessOrExit(err);
-
-        /*
         TLVType type = tlvDissector.GetType();
         switch (TagNumFromTag(tag)) {
-        // TODO: add support for parsing specific CASEResume fields
-            case 1:
-            case 2:
-            case 3:
-            case 4:
+            case CASE::Sigma2_Resume::kTag_ResumptionId:
+                VerifyOrExit(type == kTLVType_ByteString, err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+                err = tlvDissector.AddTypedItem(tree, hf_Session_resumptionId, tvb);
+                SuccessOrExit(err);
+                break;
+            case CASE::Sigma2_Resume::kTag_ResumeMic:
+                VerifyOrExit(type == kTLVType_ByteString, err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+                err = tlvDissector.AddTypedItem(tree, hf_Session_resumeMic, tvb);
+                SuccessOrExit(err);
+                break;
+            case CASE::Sigma2_Resume::kTag_ResponderSessionId:
+                VerifyOrExit(type == kTLVType_UnsignedInteger, err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+                err = tlvDissector.AddTypedItem(tree, hf_PBKDFParamRequest_localSessionId, tvb);
+                SuccessOrExit(err);
+                break;
+            case CASE::Sigma2_Resume::kTag_ResponderSleepyParams:
+                err = AddSessionParameters(tlvDissector, tree, tvb, hf_Session_sleepyParams);
+                SuccessOrExit(err);
                 break;
             default:
                 ExitNow(err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
         }
-        */
     }
 
     err = tlvDissector.ExitContainer();
@@ -814,6 +1041,8 @@ DissectMatterCommon(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, voi
         return DissectStatusReport(tvb, pinfo, common_tree, msgInfo);
     case kMsgType_StandaloneAck:
         return DissectStandaloneAck(tvb, pinfo, common_tree, msgInfo);
+    case kMsgType_ICD_CheckIn:
+        return DissectICDCheckIn(tvb, pinfo, common_tree, msgInfo);
 
     // Dissect PASE Messages
     case kMsgType_PBKDFParamRequest:
@@ -864,6 +1093,10 @@ proto_register_matter_common(void)
             { "Is Error", "matter.status_report.is_error",
             FT_BOOLEAN, BASE_NONE, NULL, 0x0, NULL, HFILL }
         },
+        { &hf_CheckIn_Payload,
+            { "ICD Check-In Payload", "matter.checkin.payload",
+            FT_BYTES, SEP_SPACE, NULL, 0x0, NULL, HFILL }
+        },
 
         /*
         { &hf_PBKDFParamRequest,
@@ -887,10 +1120,26 @@ proto_register_matter_common(void)
             { "Has PBKDF Parameters", "matter.pase.has_pbkdf_params",
             FT_BOOLEAN, BASE_NONE, NULL, 0x0, NULL, HFILL }
         },
+        { &hf_PBKDFParamRequest_mrpParams,
+            { "Initiator Session Parameters", "matter.pase.initiator_session_params",
+            FT_NONE, BASE_NONE, NULL, 0x0, NULL, HFILL }
+        },
 
         { &hf_PBKDFParamResponse_responderRandom,
             { "Responder Random", "matter.pase.responder_random",
             FT_BYTES, BASE_NONE, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_PBKDFParamResponse_responderSessionId,
+            { "Responder Session ID", "matter.pase.responder_session_id",
+            FT_UINT16, BASE_DEC, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_PBKDFParamResponse_pbkdfParameters,
+            { "PBKDF Parameters", "matter.pase.pbkdf_params",
+            FT_NONE, BASE_NONE, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_PBKDFParamResponse_mrpParams,
+            { "Responder Session Parameters", "matter.pase.responder_session_params",
+            FT_NONE, BASE_NONE, NULL, 0x0, NULL, HFILL }
         },
         { &hf_PBKDFParamResponse_pbkdfIterationCount,
             { "PBKDF Iterations", "matter.pase.pbkdf_interation_count",
@@ -923,6 +1172,14 @@ proto_register_matter_common(void)
             { "cA", "matter.pase.pake3.cA",
             FT_BYTES, BASE_NONE, NULL, 0x0, NULL, HFILL }
         },
+        { &hf_PakeError_Code,
+            { "PASE Error Code", "matter.pase.error.code",
+            FT_UINT8, BASE_HEX, VALS(kPaseErrorCodeNames), 0x0, NULL, HFILL }
+        },
+        { &hf_PakeError_UnknownData,
+            { "PASE Error Additional Data", "matter.pase.error.additional_data",
+            FT_BYTES, BASE_NONE, NULL, 0x0, NULL, HFILL }
+        },
 
         { &hf_Session_destinationId,
             { "Destination Node ID", "matter.session.destination_id",
@@ -936,11 +1193,74 @@ proto_register_matter_common(void)
             { "Encrypted", "matter.session.encrypted",
             FT_BYTES, BASE_NONE, NULL, 0x0, NULL, HFILL }
         },
+        { &hf_Session_encrypted2,
+            { "Encrypted2", "matter.session.encrypted2",
+            FT_NONE, BASE_NONE, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_Session_encrypted3,
+            { "Encrypted3", "matter.session.encrypted3",
+            FT_NONE, BASE_NONE, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_Session_encryptedCiphertext,
+            { "Ciphertext", "matter.session.encrypted.ciphertext",
+            FT_BYTES, BASE_NONE, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_Session_encryptedMic,
+            { "Auth Tag (MIC)", "matter.session.encrypted.mic",
+            FT_BYTES, BASE_NONE, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_Session_resumptionId,
+            { "Resumption ID", "matter.session.resumption_id",
+            FT_BYTES, BASE_NONE, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_Session_resumeMic,
+            { "Resume MIC", "matter.session.resume_mic",
+            FT_BYTES, BASE_NONE, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_Session_sleepyParams,
+            { "Sleepy Params", "matter.session.sleepy_params",
+            FT_NONE, BASE_NONE, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_Session_idleRetransTimeout,
+            { "Idle Retrans Timeout (ms)", "matter.session.idle_retrans_timeout_ms",
+            FT_UINT32, BASE_DEC, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_Session_activeRetransTimeout,
+            { "Active Retrans Timeout (ms)", "matter.session.active_retrans_timeout_ms",
+            FT_UINT32, BASE_DEC, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_Session_activeThreshold,
+            { "Active Threshold (ms)", "matter.session.active_threshold_ms",
+            FT_UINT16, BASE_DEC, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_Session_dataModelRevision,
+            { "Data Model Revision", "matter.session.data_model_revision",
+            FT_UINT16, BASE_DEC, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_Session_interactionModelRevision,
+            { "Interaction Model Revision", "matter.session.interaction_model_revision",
+            FT_UINT16, BASE_DEC, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_Session_specificationVersion,
+            { "Specification Version", "matter.session.specification_version",
+            FT_UINT32, BASE_HEX, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_Session_maxPathsPerInvoke,
+            { "Max Paths Per Invoke", "matter.session.max_paths_per_invoke",
+            FT_UINT16, BASE_DEC, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_Session_unknownParam,
+            { "Unknown Session Parameter", "matter.session.unknown_param",
+            FT_STRING, BASE_NONE, NULL, 0x0, NULL, HFILL }
+        },
 
     };
 
     static gint *ett[] = {
         &ett_MatterCommon,
+        &ett_SessionParameters,
+        &ett_PBKDFParameters,
+        &ett_SessionEncrypted,
     };
 
     proto_MatterCommon = proto_register_protocol(

@@ -97,7 +97,7 @@ Once the Wireshark source is prepared, one can clone and build the Matter Wiresh
     cd matter-dissector
     WIRESHARK_SRC_DIR=<path to wireshark source directory> make
 
-Note that WIRESHARK_SRC_DIR defaults to "../wireshark".
+Note that WIRESHARK_SRC_DIR defaults to "../wireshark-4.6.3".
 
 ## Make command
 
@@ -186,6 +186,28 @@ In order to use the sniffer, one needs to install the encryption keys Matter nod
 4) Select [+]
 
 5) Enter a 128-bit key in hex (32 characters long) and hit return.
+
+#### MatterProxy key hint file (optional)
+
+For captures exported by MatterProxy workflows, you can also load key hints from a text file:
+
+1) Select Edit menu -> Preferences ...
+2) In tab to left, select Protocols -> Matter
+3) Set `MatterProxy Key Hint File` to a local text file
+
+Each non-empty line supports:
+
+```
+key=<32-hex> [session=<id>] [src=<node-id>]
+```
+
+Examples:
+
+```
+key=5EDED244E5532B3CDC23409DBAD052D2
+key=A9E011B1737C6D4B70E4C0A2FE660476 session=0xA3C2
+key=44D43C91D227F3BA0824C5D87CB81B33 session=41826 src=0x0000000000000001
+```
 
 #### Stock developer Encryption Keys
 

@@ -20,7 +20,7 @@ endif
 #LD  = $(CROSS_COMPILE)ld
 #AR  = $(CROSS_COMPILE)llvm-ar
 
-WIRESHARK_SRC_DIR ?= ../wireshark
+WIRESHARK_SRC_DIR ?= ../wireshark-4.6.3
 WIRESHARK_BUILD_DIR ?= $(WIRESHARK_SRC_DIR)/build
 WIRESHARK_INCLUDE_DIR ?= $(WIRESHARK_SRC_DIR)/include
 WIRESHARK_UTIL_DIR ?= $(WIRESHARK_SRC_DIR)/wsutil
@@ -73,7 +73,7 @@ PLUGIN_OUT = matter-dissector.so
 LDFLAGS += -Wl,-soname=$(PLUGIN_NAME).so -Wl,-Map -Wl,$(PLUGIN_NAME).map -Wl,--cref -Wl,--exclude-libs=ALL -Wl,--gc-sections
 endif
 
-DISSECTOR_SRCS := packet-matter.cpp packet-matter-decrypt.cpp packet-matter-echo.cpp packet-matter-common.cpp packet-matter-im.cpp packet-matter-security.cpp
+DISSECTOR_SRCS := packet-matter.cpp packet-matter-decrypt.cpp packet-matter-echo.cpp packet-matter-common.cpp packet-matter-im.cpp packet-matter-security.cpp packet-matter-udc.cpp
 SRCS := $(DISSECTOR_SRCS) $(MATTER_SRCS) TLVDissector.cpp MatterMessageTracker.cpp MessageEncryptionKey.cpp UserEncryptionKeyPrefs.cpp UserNodeIdPrefs.cpp HKDF.c
 HEADERS = moduleinfo.h  packet-matter.h packet-matter-decrypt.h TLVDissector.h MatterMessageTracker.h MessageEncryptionKey.h UserEncryptionKeyPrefs.h UserNodeIdPrefs.h HKDF.h
 OBJS := $(foreach src, $(SRCS), $(src:.c=.o))
@@ -106,8 +106,8 @@ tests/test-packet-matter-decrypt.exe: tests/test-packet-matter-decrypt.o packet-
 
 
 install : $(PLUGIN_OUT)
-	mkdir -p ~/.local/lib/wireshark/plugins/3.6/epan
-	cp $(PLUGIN_OUT) ~/.local/lib/wireshark/plugins/3.6/epan
+	mkdir -p ~/.local/lib/wireshark/plugins/4.6/epan
+	cp $(PLUGIN_OUT) ~/.local/lib/wireshark/plugins/4.6/epan
 
 test : install
 	WIRESHARK_RUN_FROM_BUILD_DIRECTORY=1 $(WIRESHARK_BUILD_DIR)/run/wireshark $(TEST_INPUT)

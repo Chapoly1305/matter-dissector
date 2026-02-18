@@ -16,12 +16,16 @@
 #include <stdint.h>
 #include <inttypes.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <utime.h>
 #include <ctype.h>
 #include <errno.h>
+#include <string>
+#include <vector>
+#include <sstream>
 
 #include <glib.h>
 #include "config.h"
@@ -65,12 +69,12 @@ using namespace matter;
 #endif
 
 extern "C" {
-// Targets Wireshark version 4.2
+// Targets Wireshark version 4.6
 WS_DLL_PUBLIC const int plugin_want_major = 4;
-WS_DLL_PUBLIC const int plugin_want_minor = 2;
+WS_DLL_PUBLIC const int plugin_want_minor = 6;
 
 WS_DLL_PUBLIC const gchar plugin_version[] = PLUGIN_VERSION;
-WS_DLL_PUBLIC const gchar plugin_release[] = "4.2";
+WS_DLL_PUBLIC const gchar plugin_release[] = "4.6";
 WS_DLL_PUBLIC void plugin_register(void);
 }
 
@@ -117,7 +121,207 @@ static int hf_Matter_MsgCntrReuseFrameNum = -1;
 
 static dissector_table_t matter_subdissector_table;
 
-static gboolean pref_ShowNodeIds = true;
+static bool pref_ShowNodeIds = true;
+static const char *pref_MatterProxyKeyHintFile = NULL;
+
+struct MatterProxyHintKey
+{
+    bool hasKeyId = false;
+    uint16_t keyId = 0;
+    bool hasSrcNodeId = false;
+    uint64_t srcNodeId = 0;
+    unsigned char key[kDataEncKeyLength_AES128CCM] = { 0 };
+};
+
+static std::vector<MatterProxyHintKey> sMatterProxyHintKeys;
+static std::string sMatterProxyHintPath;
+static time_t sMatterProxyHintMTime = 0;
+
+static std::string
+TrimStr(const std::string &s)
+{
+    size_t b = 0;
+    while (b < s.size() && isspace(static_cast<unsigned char>(s[b]))) {
+        b++;
+    }
+    size_t e = s.size();
+    while (e > b && isspace(static_cast<unsigned char>(s[e - 1]))) {
+        e--;
+    }
+    return s.substr(b, e - b);
+}
+
+static std::string
+NormalizeHex(const std::string &s)
+{
+    std::string out;
+    out.reserve(s.size());
+    for (char ch : s) {
+        if (isxdigit(static_cast<unsigned char>(ch))) {
+            out.push_back(ch);
+        }
+    }
+    return out;
+}
+
+static bool
+ParseUIntAuto(const std::string &s, uint64_t &out)
+{
+    if (s.empty()) {
+        return false;
+    }
+    char *end = nullptr;
+    errno = 0;
+    unsigned long long v = strtoull(s.c_str(), &end, 0);
+    if (errno != 0 || end == s.c_str() || *end != '\0') {
+        return false;
+    }
+    out = static_cast<uint64_t>(v);
+    return true;
+}
+
+static bool
+ParseHexKeyBytes(const std::string &raw, unsigned char out[kDataEncKeyLength_AES128CCM])
+{
+    const std::string hex = NormalizeHex(raw);
+    if (hex.size() != (kDataEncKeyLength_AES128CCM * 2)) {
+        return false;
+    }
+    for (size_t i = 0; i < kDataEncKeyLength_AES128CCM; i++) {
+        const std::string byteText = hex.substr(i * 2, 2);
+        char *end = nullptr;
+        unsigned long v = strtoul(byteText.c_str(), &end, 16);
+        if (end == byteText.c_str() || *end != '\0' || v > 0xFF) {
+            return false;
+        }
+        out[i] = static_cast<unsigned char>(v);
+    }
+    return true;
+}
+
+static bool
+ParseMatterProxyHintLine(const std::string &lineRaw, MatterProxyHintKey &out)
+{
+    std::string line = lineRaw;
+    const size_t hashPos = line.find('#');
+    if (hashPos != std::string::npos) {
+        line = line.substr(0, hashPos);
+    }
+    for (char &ch : line) {
+        if (ch == ',' || ch == ';' || ch == '\t') {
+            ch = ' ';
+        }
+    }
+    line = TrimStr(line);
+    if (line.empty()) {
+        return false;
+    }
+
+    std::string keyField;
+    std::string sessionField;
+    std::string srcField;
+
+    std::istringstream iss(line);
+    std::string tok;
+    while (iss >> tok) {
+        const size_t eq = tok.find('=');
+        if (eq == std::string::npos) {
+            if (keyField.empty()) {
+                keyField = tok;
+            }
+            continue;
+        }
+        std::string k = tok.substr(0, eq);
+        std::string v = tok.substr(eq + 1);
+        if (k == "key" || k == "key_hex" || k == "enc_key") {
+            keyField = v;
+        }
+        else if (k == "session" || k == "session_id" || k == "key_id") {
+            sessionField = v;
+        }
+        else if (k == "src" || k == "src_node" || k == "src_node_id") {
+            srcField = v;
+        }
+    }
+
+    if (!ParseHexKeyBytes(keyField, out.key)) {
+        return false;
+    }
+
+    if (!sessionField.empty()) {
+        uint64_t parsed = 0;
+        if (ParseUIntAuto(sessionField, parsed) && parsed <= 0xFFFFu) {
+            out.hasKeyId = true;
+            out.keyId = static_cast<uint16_t>(parsed);
+        }
+    }
+
+    if (!srcField.empty()) {
+        uint64_t parsed = 0;
+        if (ParseUIntAuto(srcField, parsed)) {
+            out.hasSrcNodeId = true;
+            out.srcNodeId = parsed;
+        }
+    }
+
+    return true;
+}
+
+static void
+RefreshMatterProxyHintKeys(void)
+{
+    const std::string path = TrimStr(pref_MatterProxyKeyHintFile ? pref_MatterProxyKeyHintFile : "");
+    if (path.empty()) {
+        sMatterProxyHintKeys.clear();
+        sMatterProxyHintPath.clear();
+        sMatterProxyHintMTime = 0;
+        return;
+    }
+
+    struct stat fs;
+    if (stat(path.c_str(), &fs) != 0) {
+        sMatterProxyHintKeys.clear();
+        sMatterProxyHintPath = path;
+        sMatterProxyHintMTime = 0;
+        return;
+    }
+
+    if (sMatterProxyHintPath == path && sMatterProxyHintMTime == fs.st_mtime) {
+        return;
+    }
+
+    std::vector<MatterProxyHintKey> parsed;
+    FILE *fp = fopen(path.c_str(), "r");
+    if (fp != NULL) {
+        char line[1024];
+        while (fgets(line, sizeof(line), fp) != NULL) {
+            MatterProxyHintKey hint;
+            if (ParseMatterProxyHintLine(line, hint)) {
+                parsed.push_back(hint);
+            }
+        }
+        fclose(fp);
+    }
+
+    sMatterProxyHintKeys.swap(parsed);
+    sMatterProxyHintPath = path;
+    sMatterProxyHintMTime = fs.st_mtime;
+
+    // Pre-load key-id specific hints into the main key table for fast lookup.
+    for (const auto &hint : sMatterProxyHintKeys) {
+        if (!hint.hasKeyId) {
+            continue;
+        }
+        MessageEncryptionKey keyData;
+        memset(&keyData, 0, sizeof(keyData));
+        keyData.keyId = hint.keyId;
+        keyData.sessionType = matter::kMatterEncryptionType_AES128CCM;
+        keyData.dataEncKey = const_cast<unsigned char *>(hint.key);
+        keyData.dataEncKeyLen = kDataEncKeyLength_AES128CCM;
+        keyData.srcNodeId = hint.hasSrcNodeId ? hint.srcNodeId : 0;
+        MessageEncryptionKeyTable::AddKey(keyData);
+    }
+}
 
 const value_string sessionTypeNames[] = {
     { kMatterSessionType_Unicast, "Unicast" },
@@ -153,6 +357,7 @@ TryDecryptMessage(tvbuff_t *tvb, int encDataOffset, packet_info *pinfo, const Ma
 
     if (MessageIsEncrypted(msgInfo)) {
         MatterMessageInfo msgInfoCopy = msgInfo;
+        RefreshMatterProxyHintKeys();
 
         dataLen = msgInfo.msgLen - encDataOffset;
         encData = (uint8_t *)tvb_memdup(pinfo->pool, tvb, encDataOffset, dataLen);
@@ -198,6 +403,33 @@ TryDecryptMessage(tvbuff_t *tvb, int encDataOffset, packet_info *pinfo, const Ma
             if (success) {
                 userPrefKey.keyId = msgInfo.sessionId;
                 MessageEncryptionKeyTable::AddKey(userPrefKey);
+            }
+        }
+
+        // If still no key worked, try matterproxy hint keys loaded from file preference.
+        if (!success && !sMatterProxyHintKeys.empty()) {
+            MessageEncryptionKey hintKey;
+            for (const auto &hint : sMatterProxyHintKeys) {
+                if (hint.hasKeyId && hint.keyId != msgInfo.sessionId) {
+                    continue;
+                }
+
+                memset(&hintKey, 0, sizeof(hintKey));
+                hintKey.keyId = msgInfo.sessionId;
+                hintKey.sessionType = matter::kMatterEncryptionType_AES128CCM;
+                hintKey.dataEncKey = const_cast<unsigned char *>(hint.key);
+                hintKey.dataEncKeyLen = kDataEncKeyLength_AES128CCM;
+                hintKey.srcNodeId = hint.hasSrcNodeId ? hint.srcNodeId : msgInfo.srcNodeId;
+
+                success = TryDecryptMessage_AES128CCM(encData, unencData, dataLen, aadData, encDataOffset, pinfo, msgInfo, hintKey);
+                if (!success && msgInfo.srcNodeId == 0 && hint.hasSrcNodeId) {
+                    msgInfoCopy.srcNodeId = hint.srcNodeId;
+                    success = TryDecryptMessage_AES128CCM(encData, unencData, dataLen, aadData, encDataOffset, pinfo, msgInfoCopy, hintKey);
+                }
+                if (success) {
+                    MessageEncryptionKeyTable::AddKey(hintKey);
+                    break;
+                }
             }
         }
 
@@ -575,7 +807,7 @@ DissectMatterTCP(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, void *
     return tvb_captured_length(tvb);
 }
 
-static gboolean MatterExchangeFilter_IsValid(struct _packet_info *pinfo, void *user_data)
+static bool MatterExchangeFilter_IsValid(struct _packet_info *pinfo, void *user_data)
 {
     return proto_is_frame_protocol(pinfo->layers, "matter") && MatterMessageTracker::FindMessageRecord(pinfo) != NULL;
 }
@@ -744,6 +976,11 @@ proto_register_matter(void)
             "show_node_ids", "Show node ids",
             "Show source and destination node ids in the packet information column",
             &pref_ShowNodeIds);
+    prefs_register_string_preference(prefs_matter,
+            "matterproxy_key_hints_file",
+            "MatterProxy Key Hint File",
+            "Optional text file with one key per line. Format: key=<32-hex> [session=<id>] [src=<node-id>].",
+            &pref_MatterProxyKeyHintFile);
 
     register_init_routine(InitMatterDissector);
 
@@ -778,6 +1015,7 @@ void plugin_register(void)
     static proto_plugin plugin_matter_echo;
     static proto_plugin plugin_matter_security;
     static proto_plugin plugin_matter_im;
+    static proto_plugin plugin_matter_udc;
 
     plugin_matter.register_protoinfo = proto_register_matter;
     plugin_matter.register_handoff = proto_reg_handoff_matter;
@@ -798,4 +1036,8 @@ void plugin_register(void)
     plugin_matter_im.register_protoinfo = proto_register_matter_im;
     plugin_matter_im.register_handoff = proto_reg_handoff_matter_im;
     proto_register_plugin(&plugin_matter_im);
+
+    plugin_matter_udc.register_protoinfo = proto_register_matter_udc;
+    plugin_matter_udc.register_handoff = proto_reg_handoff_matter_udc;
+    proto_register_plugin(&plugin_matter_udc);
 }

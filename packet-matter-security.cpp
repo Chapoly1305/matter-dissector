@@ -73,6 +73,7 @@ static int ett_CASEBeginSessionRequest_Signature = -1;
 static int ett_CertInfo_RelatedCertsList = -1;
 static int ett_CertInfo_TrustAnchorsList = -1;
 static int ett_Cert = -1;
+static int ett_CertDN = -1;
 static int ett_CertRef = -1;
 
 static int hf_CASEBeginSessionRequest_ControlHeader = -1;
@@ -109,6 +110,18 @@ static int hf_CertInfo_RelatedCertsList = -1;
 static int hf_CertInfo_TrustAnchorsList = -1;
 
 static int hf_Cert = -1;
+static int hf_Cert_SerialNumber = -1;
+static int hf_Cert_Issuer = -1;
+static int hf_Cert_IssuerAttribute = -1;
+static int hf_Cert_Subject = -1;
+static int hf_Cert_SubjectAttribute = -1;
+static int hf_Cert_NotBefore = -1;
+static int hf_Cert_NotAfter = -1;
+static int hf_Cert_PublicKeyAlgorithm = -1;
+static int hf_Cert_EllipticCurveIdentifier = -1;
+static int hf_Cert_EllipticCurvePublicKey = -1;
+static int hf_Cert_Signature = -1;
+static int hf_Cert_Unknown = -1;
 
 static int hf_CertRef = -1;
 
@@ -141,7 +154,6 @@ static const value_string matterCurveNames[] = {
     { kMatterCurveId_prime256v1, "prime256v1" },
     { 0, NULL }
 };
-
 
 static void
 ComputeCASEMessageHash(tvbuff_t *tvb, uint16_t msgLenWithoutSig, uint32_t config, uint8_t *hashBuf)
@@ -282,14 +294,148 @@ RecoverCASESessionKey(CASEExchangeRecord *caseExchangeRec)
     caseExchangeRec->recoveredSessionKey = DeriveCASESessionKey(caseExchangeRec, sharedSecret, sharedSecretLen);
 }
 
+static const char *
+GetCertDNAttrName(uint32_t attrTag)
+{
+    switch (attrTag) {
+    case kTag_DNAttrType_CommonName: return "CommonName";
+    case kTag_DNAttrType_Surname: return "Surname";
+    case kTag_DNAttrType_SerialNumber: return "SerialNumber";
+    case kTag_DNAttrType_CountryName: return "CountryName";
+    case kTag_DNAttrType_LocalityName: return "LocalityName";
+    case kTag_DNAttrType_StateOrProvinceName: return "StateOrProvinceName";
+    case kTag_DNAttrType_OrganizationName: return "OrganizationName";
+    case kTag_DNAttrType_OrganizationalUnitName: return "OrganizationalUnitName";
+    case kTag_DNAttrType_Title: return "Title";
+    case kTag_DNAttrType_Name: return "Name";
+    case kTag_DNAttrType_GivenName: return "GivenName";
+    case kTag_DNAttrType_Initials: return "Initials";
+    case kTag_DNAttrType_GenerationQualifier: return "GenerationQualifier";
+    case kTag_DNAttrType_DNQualifier: return "DNQualifier";
+    case kTag_DNAttrType_Pseudonym: return "Pseudonym";
+    case kTag_DNAttrType_DomainComponent: return "DomainComponent";
+    case kTag_DNAttrType_MatterDeviceId: return "NodeId";
+    case kTag_DNAttrType_MatterServiceEndpointId: return "ServiceEndpointId";
+    case kTag_DNAttrType_MatterCAId: return "FabricId";
+    case kTag_DNAttrType_MatterSoftwarePublisherId: return "SoftwarePublisherId";
+    default: return "UnknownAttr";
+    }
+}
+
+static MATTER_ERROR
+AddCertDN(TLVDissector& tlvDissector, proto_tree *tree, tvbuff_t* tvb, int hfContainer, int hfAttr)
+{
+    MATTER_ERROR err = MATTER_NO_ERROR;
+    proto_tree *dnTree = nullptr;
+
+    VerifyOrExit(tlvDissector.GetType() == kTLVType_Path || tlvDissector.GetType() == kTLVType_Structure,
+                 err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+    err = tlvDissector.AddSubTreeItem(tree, hfContainer, ett_CertDN, tvb, dnTree);
+    SuccessOrExit(err);
+
+    err = tlvDissector.EnterContainer();
+    SuccessOrExit(err);
+
+    while (true) {
+        err = tlvDissector.Next();
+        if (err == MATTER_END_OF_TLV)
+            break;
+        SuccessOrExit(err);
+
+        const uint64_t tag = tlvDissector.GetTag();
+        const TLVType type = tlvDissector.GetType();
+        const uint32_t attrTag = TagNumFromTag(tag);
+        const char *attrName = GetCertDNAttrName(attrTag);
+
+        if (type == kTLVType_UTF8String) {
+            char *val = nullptr;
+            err = tlvDissector.DupString(val);
+            SuccessOrExit(err);
+            err = tlvDissector.AddStringItemF(dnTree, hfAttr, tvb, "%s: %s", attrName, (val != nullptr) ? val : "");
+            free(val);
+        }
+        else if (type == kTLVType_UnsignedInteger) {
+            uint64_t val = 0;
+            err = tlvDissector.Get(val);
+            SuccessOrExit(err);
+            err = tlvDissector.AddStringItemF(dnTree, hfAttr, tvb, "%s: 0x%llX (%llu)",
+                                              attrName, (unsigned long long) val, (unsigned long long) val);
+        }
+        else {
+            err = tlvDissector.AddGenericTLVItem(dnTree, hf_Cert_Unknown, tvb, false);
+        }
+        SuccessOrExit(err);
+    }
+
+    err = tlvDissector.ExitContainer();
+    SuccessOrExit(err);
+
+exit:
+    return err;
+}
+
 static MATTER_ERROR
 AddCert(TLVDissector& tlvDissector, proto_tree *tree, tvbuff_t* tvb, int hfindex)
 {
     MATTER_ERROR err;
+    proto_tree *certTree = nullptr;
 
-    // TODO: implement proper cert dissector
+    VerifyOrExit(tlvDissector.GetType() == kTLVType_Structure, err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+    err = tlvDissector.AddSubTreeItem(tree, hfindex, ett_Cert, tvb, certTree);
+    SuccessOrExit(err);
 
-    err = tlvDissector.AddGenericTLVItem(tree, hfindex, tvb, true);
+    err = tlvDissector.EnterContainer();
+    SuccessOrExit(err);
+
+    while (true) {
+        err = tlvDissector.Next();
+        if (err == MATTER_END_OF_TLV)
+            break;
+        SuccessOrExit(err);
+
+        uint64_t tag = tlvDissector.GetTag();
+        TLVType type = tlvDissector.GetType();
+        VerifyOrExit(IsContextTag(tag), err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+
+        switch (TagNumFromTag(tag)) {
+        case kTag_SerialNumber:
+            err = tlvDissector.AddTypedItem(certTree, hf_Cert_SerialNumber, tvb);
+            break;
+        case kTag_Issuer:
+            err = AddCertDN(tlvDissector, certTree, tvb, hf_Cert_Issuer, hf_Cert_IssuerAttribute);
+            break;
+        case kTag_Subject:
+            err = AddCertDN(tlvDissector, certTree, tvb, hf_Cert_Subject, hf_Cert_SubjectAttribute);
+            break;
+        case kTag_NotBefore:
+            err = tlvDissector.AddTypedItem(certTree, hf_Cert_NotBefore, tvb);
+            break;
+        case kTag_NotAfter:
+            err = tlvDissector.AddTypedItem(certTree, hf_Cert_NotAfter, tvb);
+            break;
+        case kTag_PublicKeyAlgorithm:
+            err = tlvDissector.AddTypedItem(certTree, hf_Cert_PublicKeyAlgorithm, tvb);
+            break;
+        case kTag_EllipticCurveIdentifier: {
+            err = tlvDissector.AddTypedItem(certTree, hf_Cert_EllipticCurveIdentifier, tvb);
+            break;
+        }
+        case kTag_EllipticCurvePublicKey: {
+            err = tlvDissector.AddTypedItem(certTree, hf_Cert_EllipticCurvePublicKey, tvb);
+            break;
+        }
+        case kTag_ECDSASignature:
+            VerifyOrExit(type == kTLVType_Structure, err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+            err = tlvDissector.AddGenericTLVItem(certTree, hf_Cert_Signature, tvb, false);
+            break;
+        default:
+            err = tlvDissector.AddGenericTLVItem(certTree, hf_Cert_Unknown, tvb, false);
+            break;
+        }
+        SuccessOrExit(err);
+    }
+
+    err = tlvDissector.ExitContainer();
     SuccessOrExit(err);
 
 exit:
@@ -845,7 +991,6 @@ proto_register_matter_security(void)
             { "Signature", "matter.case.begin_session_request.signature",
             FT_NONE, BASE_NONE, NULL, 0x0, NULL, HFILL }
         },
-
         { &hf_ECDSASig_r,
             { "R", "matter.ecdsa_signature.r",
             FT_BYTES, SEP_SPACE, NULL, 0x0, NULL, HFILL }
@@ -857,11 +1002,11 @@ proto_register_matter_security(void)
 
         { &hf_CertInfo_EntityCert,
             { "Entity Certificate", "matter.cert_info.entity_certificate",
-            FT_STRING, BASE_NONE, NULL, 0x0, NULL, HFILL }
+            FT_NONE, BASE_NONE, NULL, 0x0, NULL, HFILL }
         },
         { &hf_CertInfo_EntityCertRef,
             { "Entity Certificate Reference", "matter.cert_info.entity_certificate_ref",
-            FT_STRING, BASE_NONE, NULL, 0x0, NULL, HFILL }
+            FT_NONE, BASE_NONE, NULL, 0x0, NULL, HFILL }
         },
         { &hf_CertInfo_RelatedCertsList,
             { "Related Certificates", "matter.cert_info.related_certificates",
@@ -874,6 +1019,54 @@ proto_register_matter_security(void)
 
         { &hf_Cert,
             { "Certificate", "matter.cert",
+            FT_NONE, BASE_NONE, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_Cert_SerialNumber,
+            { "Serial Number", "matter.cert.serial_number",
+            FT_BYTES, SEP_SPACE, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_Cert_Issuer,
+            { "Issuer", "matter.cert.issuer",
+            FT_NONE, BASE_NONE, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_Cert_IssuerAttribute,
+            { "Issuer Attribute", "matter.cert.issuer.attr",
+            FT_STRING, BASE_NONE, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_Cert_Subject,
+            { "Subject", "matter.cert.subject",
+            FT_NONE, BASE_NONE, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_Cert_SubjectAttribute,
+            { "Subject Attribute", "matter.cert.subject.attr",
+            FT_STRING, BASE_NONE, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_Cert_NotBefore,
+            { "Not Before", "matter.cert.not_before",
+            FT_UINT64, BASE_DEC, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_Cert_NotAfter,
+            { "Not After", "matter.cert.not_after",
+            FT_UINT64, BASE_DEC, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_Cert_PublicKeyAlgorithm,
+            { "Public Key Algorithm", "matter.cert.public_key_algorithm",
+            FT_UINT32, BASE_HEX, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_Cert_EllipticCurveIdentifier,
+            { "Elliptic Curve Identifier", "matter.cert.curve_id",
+            FT_UINT32, BASE_HEX, VALS(matterCurveNames), 0x0, NULL, HFILL }
+        },
+        { &hf_Cert_EllipticCurvePublicKey,
+            { "Elliptic Curve Public Key", "matter.cert.public_key",
+            FT_BYTES, SEP_SPACE, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_Cert_Signature,
+            { "Certificate Signature", "matter.cert.signature",
+            FT_STRING, BASE_NONE, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_Cert_Unknown,
+            { "Unknown Certificate Field", "matter.cert.unknown",
             FT_STRING, BASE_NONE, NULL, 0x0, NULL, HFILL }
         },
 
@@ -911,7 +1104,6 @@ proto_register_matter_security(void)
             { "Signature", "matter.case.begin_session_response.signature",
             FT_NONE, BASE_NONE, NULL, 0x0, NULL, HFILL }
         },
-
         { &hf_CASEInitiatorKeyConfirm_KeyConfirmHash,
             { "Key Confirmation Hash", "matter.case.initiator_key_confirm.key_confirm_hash",
             FT_BYTES, SEP_SPACE, NULL, 0x0, NULL, HFILL }
@@ -959,6 +1151,7 @@ proto_register_matter_security(void)
         &ett_CertInfo_RelatedCertsList,
         &ett_CertInfo_TrustAnchorsList,
         &ett_Cert,
+        &ett_CertDN,
         &ett_CertRef,
     };
 
@@ -980,4 +1173,3 @@ proto_reg_handoff_matter_security(void)
     matter_security_handle = create_dissector_handle(DissectMatterSecurity, proto_matter_security);
     dissector_add_uint("matter.profile_id", kMatterProfile_Security, matter_security_handle);
 }
-

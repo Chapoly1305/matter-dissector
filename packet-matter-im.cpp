@@ -50,6 +50,7 @@ static int ett_CommandResponse_InvokeResponseList = -1;
 
 static int ett_CommandElem = -1;
 static int ett_DataElem = -1;
+static int ett_StatusIB = -1;
 
 static int hf_IM_SubscriptionId = -1;
 
@@ -103,9 +104,14 @@ static int hf_CommandResponse_Version = -1;
 static int hf_CommandResponse_Result = -1;
 static int hf_CommandStatusIB = -1;
 static int hf_CommandDataIB = -1;
+static int hf_StatusIB = -1;
+static int hf_CommandStatus_Status = -1;
+static int hf_CommandStatus_ClusterStatus = -1;
+static int hf_CommandStatus_Ref = -1;
 
 static int hf_ImCommon_Version = -1;
 static int hf_ImCommon_Unknown = -1;
+static int hf_TimedRequest_TimeoutMs = -1;
 
 static int hf_DataElem_PropertyPath = -1;
 static int hf_DataElem_PropertyData = -1;
@@ -136,6 +142,49 @@ void AssociateWithIMSubscription(tvbuff_t *tvb, packet_info *pinfo, proto_tree *
 //    }
 }
 
+
+static MATTER_ERROR
+AddStatusIB(TLVDissector& tlvDissector, proto_tree *tree, tvbuff_t* tvb)
+{
+    MATTER_ERROR err;
+    proto_tree *statusIBTree;
+
+    VerifyOrExit(tlvDissector.GetType() == kTLVType_Structure, err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+    err = tlvDissector.AddSubTreeItem(tree, hf_StatusIB, ett_StatusIB, tvb, statusIBTree);
+    SuccessOrExit(err);
+
+    err = tlvDissector.EnterContainer();
+    SuccessOrExit(err);
+
+    while (true) {
+        err = tlvDissector.Next();
+        if (err == MATTER_END_OF_TLV)
+            break;
+        SuccessOrExit(err);
+
+        uint64_t tag = tlvDissector.GetTag();
+        VerifyOrExit(IsContextTag(tag), err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+
+        switch (TagNumFromTag(tag)) {
+        case StatusIB::kTag_Status:
+            err = tlvDissector.AddTypedItem(statusIBTree, hf_CommandStatus_Status, tvb);
+            break;
+        case StatusIB::kTag_ClusterStatus:
+            err = tlvDissector.AddTypedItem(statusIBTree, hf_CommandStatus_ClusterStatus, tvb);
+            break;
+        default:
+            err = tlvDissector.AddGenericTLVItem(statusIBTree, hf_ImCommon_Unknown, tvb, false);
+            break;
+        }
+        SuccessOrExit(err);
+    }
+
+    err = tlvDissector.ExitContainer();
+    SuccessOrExit(err);
+
+exit:
+    return err;
+}
 
 static MATTER_ERROR
 AddCommandDataIB(TLVDissector& tlvDissector, proto_tree *tree, tvbuff_t* tvb)
@@ -173,8 +222,56 @@ AddCommandDataIB(TLVDissector& tlvDissector, proto_tree *tree, tvbuff_t* tvb)
             SuccessOrExit(err);
             break;
         default:
-            ExitNow(err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+            err = tlvDissector.AddGenericTLVItem(dataElemTree, hf_ImCommon_Unknown, tvb, false);
+            SuccessOrExit(err);
+            break;
         }
+    }
+
+    err = tlvDissector.ExitContainer();
+    SuccessOrExit(err);
+
+exit:
+    return err;
+}
+
+static MATTER_ERROR
+AddCommandStatusIB(TLVDissector& tlvDissector, proto_tree *tree, tvbuff_t* tvb)
+{
+    MATTER_ERROR err;
+    proto_tree *statusTree;
+
+    VerifyOrExit(tlvDissector.GetType() == kTLVType_Structure, err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+    err = tlvDissector.AddSubTreeItem(tree, hf_CommandStatusIB, ett_CommandElem, tvb, statusTree);
+    SuccessOrExit(err);
+
+    err = tlvDissector.EnterContainer();
+    SuccessOrExit(err);
+
+    while (true) {
+        err = tlvDissector.Next();
+        if (err == MATTER_END_OF_TLV)
+            break;
+        SuccessOrExit(err);
+
+        uint64_t tag = tlvDissector.GetTag();
+        VerifyOrExit(IsContextTag(tag), err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+
+        switch (TagNumFromTag(tag)) {
+        case CommandStatusIB::kTag_Path:
+            err = tlvDissector.AddIMPathItem(statusTree, hf_DataElem_PropertyPath, tvb);
+            break;
+        case CommandStatusIB::kTag_Status:
+            err = AddStatusIB(tlvDissector, statusTree, tvb);
+            break;
+        case CommandStatusIB::kTag_Ref:
+            err = tlvDissector.AddTypedItem(statusTree, hf_CommandStatus_Ref, tvb);
+            break;
+        default:
+            err = tlvDissector.AddGenericTLVItem(statusTree, hf_ImCommon_Unknown, tvb, false);
+            break;
+        }
+        SuccessOrExit(err);
     }
 
     err = tlvDissector.ExitContainer();
@@ -188,7 +285,6 @@ static MATTER_ERROR
 AddInvokeResponseIB(TLVDissector& tlvDissector, proto_tree *tree, tvbuff_t* tvb)
 {
     MATTER_ERROR err;
-    proto_tree *dataElemTree;
 
     err = tlvDissector.EnterContainer();
     SuccessOrExit(err);
@@ -213,14 +309,14 @@ AddInvokeResponseIB(TLVDissector& tlvDissector, proto_tree *tree, tvbuff_t* tvb)
             SuccessOrExit(err);
             break;
         case InvokeResponseIB::kTag_Status:
-            err = tlvDissector.AddSubTreeItem(tree, hf_CommandStatusIB, ett_CommandElem, tvb, dataElemTree);
-            SuccessOrExit(err);
-
-            err = tlvDissector.AddGenericTLVItem(dataElemTree, hf_DataElem_PropertyData, tvb, true);
+            VerifyOrExit(type == kTLVType_Structure, err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+            err = AddCommandStatusIB(tlvDissector, tree, tvb);
             SuccessOrExit(err);
             break;
         default:
-            ExitNow(err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+            err = tlvDissector.AddGenericTLVItem(tree, hf_ImCommon_Unknown, tvb, false);
+            SuccessOrExit(err);
+            break;
         }
     }
 
@@ -734,7 +830,8 @@ DissectIMCommandRequest(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_,
                 break;
 
             default:
-                ExitNow(err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+                SuccessOrExit(err = tlvDissector.AddGenericTLVItem(tree, hf_ImCommon_Unknown, tvb, false));
+                break;
         }
 
     }
@@ -772,6 +869,7 @@ DissectIMCommandResponse(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_
         SuccessOrExit(err);
 
         uint64_t tag = tlvDissector.GetTag();
+        TLVType type = tlvDissector.GetType();
         VerifyOrExit(IsContextTag(tag), err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
         tag = TagNumFromTag(tag);
 
@@ -782,17 +880,11 @@ DissectIMCommandResponse(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_
                 break;
 
             case InvokeCommandResponse::kTag_InvokeResponses:
-                hf_entry = hf_CommandResponse_InvokeResponses;
-                break;
-/*
-            // Alternative implementation to perform deeper parsing of element:
-            case InvokeCommandResponse::kTag_InvokeResponses:
                 VerifyOrExit(type == kTLVType_Array, err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
                 hf_entry = -1;
                 err = tlvDissector.AddListItem(tree, hf_CommandResponse_InvokeResponsesDetail, ett_CommandResponse_InvokeResponseList, tvb, AddInvokeResponseIB);
                 SuccessOrExit(err);
                 break;
-*/
 
             case CommonActionInfo::kTag_InteractionModelRevision: 
                 hf_entry = hf_ImCommon_Version;
@@ -828,7 +920,33 @@ DissectIMTimedRequest(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, c
     err = tlvDissector.Next(kTLVType_Structure, AnonymousTag);
     SuccessOrExit(err);
 
-    err = tlvDissector.AddGenericTLVItem(tree, hf_ImCommon_Unknown, tvb, true);
+    err = tlvDissector.EnterContainer();
+    SuccessOrExit(err);
+
+    while (true) {
+        err = tlvDissector.Next();
+        if (err == MATTER_END_OF_TLV)
+            break;
+        SuccessOrExit(err);
+
+        uint64_t tag = tlvDissector.GetTag();
+        VerifyOrExit(IsContextTag(tag), err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+
+        switch (TagNumFromTag(tag)) {
+        case TimedRequest::kTag_TimeoutMs:
+            err = tlvDissector.AddTypedItem(tree, hf_TimedRequest_TimeoutMs, tvb);
+            break;
+        case CommonActionInfo::kTag_InteractionModelRevision:
+            err = tlvDissector.AddGenericTLVItem(tree, hf_ImCommon_Version, tvb, false);
+            break;
+        default:
+            err = tlvDissector.AddGenericTLVItem(tree, hf_ImCommon_Unknown, tvb, false);
+            break;
+        }
+        SuccessOrExit(err);
+    }
+
+    err = tlvDissector.ExitContainer();
     SuccessOrExit(err);
 
 exit:
@@ -871,7 +989,7 @@ DissectIM(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, void *data _U
     }
 }
 
-static gboolean IMSubscriptionFilter_IsValid(struct _packet_info *pinfo, void *user_data)
+static bool IMSubscriptionFilter_IsValid(struct _packet_info *pinfo, void *user_data)
 {
     MatterMessageRecord *msgRec = MatterMessageTracker::FindMessageRecord(pinfo);
     return msgRec != NULL && msgRec->imSubscription != 0;
@@ -901,6 +1019,10 @@ proto_register_matter_im(void)
         { &hf_ImCommon_Unknown,
             { "Unknown", "im.unknown",
             FT_STRING, BASE_NONE, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_TimedRequest_TimeoutMs,
+            { "TimeoutMs", "im.timed_req.timeout_ms",
+            FT_UINT16, BASE_DEC, NULL, 0x0, NULL, HFILL }
         },
 
         // ===== Status Response =====
@@ -1088,6 +1210,22 @@ proto_register_matter_im(void)
             { "CommandStatusIB", "im.struct.CommandStatusIB",
             FT_NONE, BASE_NONE, NULL, 0x0, NULL, HFILL }
         },
+        { &hf_StatusIB,
+            { "StatusIB", "im.struct.StatusIB",
+            FT_NONE, BASE_NONE, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_CommandStatus_Status,
+            { "StatusIB Status", "im.struct.StatusIB.status",
+            FT_UINT16, BASE_DEC, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_CommandStatus_ClusterStatus,
+            { "StatusIB ClusterStatus", "im.struct.StatusIB.cluster_status",
+            FT_UINT16, BASE_DEC, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_CommandStatus_Ref,
+            { "Command Ref", "im.struct.CommandStatusIB.ref",
+            FT_UINT16, BASE_DEC, NULL, 0x0, NULL, HFILL }
+        },
         { &hf_DataElem_PropertyPath,
             { "Property Path", "im.struct.CommandPathIB",
             FT_STRING, BASE_NONE, NULL, 0x0, NULL, HFILL }
@@ -1110,6 +1248,7 @@ proto_register_matter_im(void)
         &ett_CommandResponse_InvokeResponseList,
         &ett_CommandElem,
         &ett_DataElem,
+        &ett_StatusIB,
     };
 
     proto_im = proto_register_protocol(
@@ -1132,4 +1271,3 @@ proto_reg_handoff_matter_im(void)
     matter_im_handle = create_dissector_handle(DissectIM, proto_im);
     dissector_add_uint("matter.profile_id", kMatterProfile_InteractionModel, matter_im_handle);
 }
-

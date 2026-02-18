@@ -68,6 +68,8 @@ extern void proto_register_matter_security(void);
 extern void proto_reg_handoff_matter_security(void);
 extern void proto_register_matter_im(void);
 extern void proto_reg_handoff_matter_im(void);
+extern void proto_register_matter_udc(void);
+extern void proto_reg_handoff_matter_udc(void);
 
 extern void AddMessageTypeToInfoColumn(packet_info *pinfo, const MatterMessageInfo& msgInfo);
 
