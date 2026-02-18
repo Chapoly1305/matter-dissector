@@ -58,6 +58,11 @@ Users should also be aware that the Matter dissector may have bugs that may caus
 The current version of the Matter Wireshark plugin in this workspace targets **Wireshark 4.6.3** on Linux.
 Support for the old 4.2 workspace has been dropped in this branch.
 
+### Matter Baseline
+
+The ws-4.6.3 workspace is adapted against Project CHIP (`connectedhomeip`) **`v1.5-branch`**.
+Current baseline used during this adaptation: `v1.5-branch@d0538c5d`.
+
 Installing the Wireshark plugin is as simple as copying the shared library file into your local plugins directory:
 
     mkdir -p ${HOME}/.local/lib/wireshark/plugins/4.6/epan
