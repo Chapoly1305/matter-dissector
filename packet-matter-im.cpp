@@ -117,6 +117,8 @@ static int hf_TimedRequest_TimeoutMs = -1;
 static int hf_DataElem_PropertyPath = -1;
 static int hf_DataElem_PropertyData = -1;
 
+static MATTER_ERROR AddStatusIB(TLVDissector& tlvDissector, proto_tree *tree, tvbuff_t* tvb);
+
 namespace
 {
 struct ClusterNameEntry
@@ -174,6 +176,7 @@ enum class PathKind
     Command,
     Attribute,
     Event,
+    Cluster,
 };
 
 static MATTER_ERROR AddNamedPathItem(TLVDissector & tlvDissector, proto_tree * tree, tvbuff_t * tvb, PathKind kind)
@@ -186,12 +189,43 @@ static MATTER_ERROR AddNamedPathItem(TLVDissector & tlvDissector, proto_tree * t
     uint32_t clusterId = 0;
     uint32_t itemId = 0;
     const char *itemLabel = "Field";
+    uint32_t endpointTag = 0xFFFFFFFF;
+    uint32_t clusterTag = 0xFFFFFFFF;
+    uint32_t itemTag = 0xFFFFFFFF;
 
     VerifyOrExit(tlvDissector.GetType() == kTLVType_Path || tlvDissector.GetType() == kTLVType_Structure,
                  err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
 
     err = tlvDissector.EnterContainer();
     SuccessOrExit(err);
+
+    switch (kind)
+    {
+    case PathKind::Command:
+        endpointTag = 0;
+        clusterTag = 1;
+        itemTag = 2;
+        itemLabel = "Command";
+        break;
+    case PathKind::Attribute:
+        endpointTag = 2;
+        clusterTag = 3;
+        itemTag = 4;
+        itemLabel = "Attribute";
+        break;
+    case PathKind::Event:
+        endpointTag = 1;
+        clusterTag = 2;
+        itemTag = 3;
+        itemLabel = "Event";
+        break;
+    case PathKind::Cluster:
+        endpointTag = 1;
+        clusterTag = 2;
+        itemTag = 0xFFFFFFFF;
+        itemLabel = "Cluster";
+        break;
+    }
 
     while (true)
     {
@@ -215,21 +249,21 @@ static MATTER_ERROR AddNamedPathItem(TLVDissector & tlvDissector, proto_tree * t
         err = tlvDissector.Get(value);
         SuccessOrExit(err);
 
-        if (!endpointPresent && (tagNum == 0 || tagNum == 1))
+        if (!endpointPresent && tagNum == endpointTag)
         {
             endpointId = static_cast<uint32_t>(value);
             endpointPresent = true;
             continue;
         }
 
-        if (!clusterPresent && (tagNum == 1 || tagNum == 2))
+        if (!clusterPresent && tagNum == clusterTag)
         {
             clusterId = static_cast<uint32_t>(value);
             clusterPresent = true;
             continue;
         }
 
-        if (!itemPresent && (tagNum == 2 || tagNum == 3))
+        if (!itemPresent && itemTag != 0xFFFFFFFF && tagNum == itemTag)
         {
             itemId = static_cast<uint32_t>(value);
             itemPresent = true;
@@ -239,19 +273,6 @@ static MATTER_ERROR AddNamedPathItem(TLVDissector & tlvDissector, proto_tree * t
 
     err = tlvDissector.ExitContainer();
     SuccessOrExit(err);
-
-    switch (kind)
-    {
-    case PathKind::Command:
-        itemLabel = "Command";
-        break;
-    case PathKind::Attribute:
-        itemLabel = "Attribute";
-        break;
-    case PathKind::Event:
-        itemLabel = "Event";
-        break;
-    }
 
     {
         std::string out;
@@ -308,6 +329,11 @@ static MATTER_ERROR AddNamedPathItem(TLVDissector & tlvDissector, proto_tree * t
             }
         }
 
+        if (!endpointPresent && !clusterPresent && !itemPresent)
+        {
+            ExitNow(err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+        }
+
         if (out.empty())
         {
             out = "Unknown Path";
@@ -328,6 +354,11 @@ static MATTER_ERROR AddAttributePathItem(TLVDissector & tlvDissector, proto_tree
 static MATTER_ERROR AddEventPathItem(TLVDissector & tlvDissector, proto_tree * tree, tvbuff_t * tvb)
 {
     return AddNamedPathItem(tlvDissector, tree, tvb, PathKind::Event);
+}
+
+static MATTER_ERROR AddClusterPathItem(TLVDissector & tlvDissector, proto_tree * tree, tvbuff_t * tvb)
+{
+    return AddNamedPathItem(tlvDissector, tree, tvb, PathKind::Cluster);
 }
 
 static MATTER_ERROR AddNamedStructItem(TLVDissector & tlvDissector, proto_tree * tree, tvbuff_t * tvb, PathKind kind)
@@ -377,6 +408,237 @@ static MATTER_ERROR AddAttributeDataIBItem(TLVDissector & tlvDissector, proto_tr
 static MATTER_ERROR AddEventReportIBItem(TLVDissector & tlvDissector, proto_tree * tree, tvbuff_t * tvb)
 {
     return AddNamedStructItem(tlvDissector, tree, tvb, PathKind::Event);
+}
+
+static MATTER_ERROR AddEventFilterIBItem(TLVDissector & tlvDissector, proto_tree * tree, tvbuff_t * tvb)
+{
+    MATTER_ERROR err = MATTER_NO_ERROR;
+    proto_tree * itemTree = nullptr;
+
+    VerifyOrExit(tlvDissector.GetType() == kTLVType_Structure, err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+    err = tlvDissector.AddSubTreeItem(tree, hf_ImCommon_Unknown, ett_DataElem, tvb, itemTree);
+    SuccessOrExit(err);
+
+    err = tlvDissector.EnterContainer();
+    SuccessOrExit(err);
+
+    while (true) {
+        err = tlvDissector.Next();
+        if (err == MATTER_END_OF_TLV) {
+            err = MATTER_NO_ERROR;
+            break;
+        }
+        SuccessOrExit(err);
+
+        const uint64_t tag = tlvDissector.GetTag();
+        const TLVType type = tlvDissector.GetType();
+        if (IsContextTag(tag) && type == kTLVType_UnsignedInteger) {
+            uint64_t value = 0;
+            err = tlvDissector.Get(value);
+            SuccessOrExit(err);
+            switch (TagNumFromTag(tag)) {
+            case 0:
+                err = tlvDissector.AddStringItemF(itemTree, hf_ImCommon_Unknown, tvb, "Node=0x%llX", (unsigned long long) value);
+                break;
+            case 1:
+                err = tlvDissector.AddStringItemF(itemTree, hf_ImCommon_Unknown, tvb, "EventMin=0x%llX", (unsigned long long) value);
+                break;
+            default:
+                err = tlvDissector.AddGenericTLVItem(itemTree, hf_ImCommon_Unknown, tvb, false);
+                break;
+            }
+        }
+        else {
+            err = tlvDissector.AddGenericTLVItem(itemTree, hf_ImCommon_Unknown, tvb, false);
+        }
+        SuccessOrExit(err);
+    }
+
+    err = tlvDissector.ExitContainer();
+    SuccessOrExit(err);
+
+exit:
+    return err;
+}
+
+static MATTER_ERROR AddDataVersionFilterIBItem(TLVDissector & tlvDissector, proto_tree * tree, tvbuff_t * tvb)
+{
+    MATTER_ERROR err = MATTER_NO_ERROR;
+    proto_tree * itemTree = nullptr;
+
+    VerifyOrExit(tlvDissector.GetType() == kTLVType_Structure, err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+    err = tlvDissector.AddSubTreeItem(tree, hf_ImCommon_Unknown, ett_DataElem, tvb, itemTree);
+    SuccessOrExit(err);
+
+    err = tlvDissector.EnterContainer();
+    SuccessOrExit(err);
+
+    while (true) {
+        err = tlvDissector.Next();
+        if (err == MATTER_END_OF_TLV) {
+            err = MATTER_NO_ERROR;
+            break;
+        }
+        SuccessOrExit(err);
+
+        const uint64_t tag = tlvDissector.GetTag();
+        if (!IsContextTag(tag)) {
+            err = tlvDissector.AddGenericTLVItem(itemTree, hf_ImCommon_Unknown, tvb, false);
+            SuccessOrExit(err);
+            continue;
+        }
+
+        switch (TagNumFromTag(tag)) {
+        case 0: {
+            MATTER_ERROR pathErr = AddClusterPathItem(tlvDissector, itemTree, tvb);
+            if (pathErr != MATTER_NO_ERROR) {
+                err = tlvDissector.AddGenericTLVItem(itemTree, hf_ImCommon_Unknown, tvb, false);
+                SuccessOrExit(err);
+            }
+            break;
+        }
+        case 1: {
+            uint64_t value = 0;
+            if (tlvDissector.GetType() == kTLVType_UnsignedInteger && tlvDissector.Get(value) == MATTER_NO_ERROR) {
+                err = tlvDissector.AddStringItemF(itemTree, hf_ImCommon_Unknown, tvb, "DataVersion=%llu", (unsigned long long) value);
+            }
+            else {
+                err = tlvDissector.AddGenericTLVItem(itemTree, hf_ImCommon_Unknown, tvb, false);
+            }
+            SuccessOrExit(err);
+            break;
+        }
+        default:
+            err = tlvDissector.AddGenericTLVItem(itemTree, hf_ImCommon_Unknown, tvb, false);
+            SuccessOrExit(err);
+            break;
+        }
+    }
+
+    err = tlvDissector.ExitContainer();
+    SuccessOrExit(err);
+
+exit:
+    return err;
+}
+
+static MATTER_ERROR AddAttributeStatusIBItem(TLVDissector & tlvDissector, proto_tree * tree, tvbuff_t * tvb)
+{
+    MATTER_ERROR err = MATTER_NO_ERROR;
+    proto_tree * itemTree = nullptr;
+
+    VerifyOrExit(tlvDissector.GetType() == kTLVType_Structure, err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+    err = tlvDissector.AddSubTreeItem(tree, hf_CommandStatusIB, ett_CommandElem, tvb, itemTree);
+    SuccessOrExit(err);
+
+    err = tlvDissector.EnterContainer();
+    SuccessOrExit(err);
+
+    while (true) {
+        err = tlvDissector.Next();
+        if (err == MATTER_END_OF_TLV) {
+            err = MATTER_NO_ERROR;
+            break;
+        }
+        SuccessOrExit(err);
+
+        const uint64_t tag = tlvDissector.GetTag();
+        if (!IsContextTag(tag)) {
+            err = tlvDissector.AddGenericTLVItem(itemTree, hf_ImCommon_Unknown, tvb, false);
+            SuccessOrExit(err);
+            continue;
+        }
+
+        switch (TagNumFromTag(tag)) {
+        case 0: {
+            MATTER_ERROR pathErr = AddNamedPathItem(tlvDissector, itemTree, tvb, PathKind::Attribute);
+            if (pathErr != MATTER_NO_ERROR) {
+                err = tlvDissector.AddGenericTLVItem(itemTree, hf_ImCommon_Unknown, tvb, false);
+                SuccessOrExit(err);
+            }
+            break;
+        }
+        case 1:
+            if (tlvDissector.GetType() == kTLVType_Structure) {
+                err = AddStatusIB(tlvDissector, itemTree, tvb);
+            }
+            else {
+                err = tlvDissector.AddGenericTLVItem(itemTree, hf_ImCommon_Unknown, tvb, false);
+            }
+            SuccessOrExit(err);
+            break;
+        default:
+            err = tlvDissector.AddGenericTLVItem(itemTree, hf_ImCommon_Unknown, tvb, false);
+            SuccessOrExit(err);
+            break;
+        }
+    }
+
+    err = tlvDissector.ExitContainer();
+    SuccessOrExit(err);
+
+exit:
+    return err;
+}
+
+static MATTER_ERROR AddAttributeReportIBItem(TLVDissector & tlvDissector, proto_tree * tree, tvbuff_t * tvb)
+{
+    MATTER_ERROR err = MATTER_NO_ERROR;
+    proto_tree * itemTree = nullptr;
+
+    VerifyOrExit(tlvDissector.GetType() == kTLVType_Structure, err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+    err = tlvDissector.AddSubTreeItem(tree, hf_DataElem_PropertyData, ett_DataElem, tvb, itemTree);
+    SuccessOrExit(err);
+
+    err = tlvDissector.EnterContainer();
+    SuccessOrExit(err);
+
+    while (true) {
+        err = tlvDissector.Next();
+        if (err == MATTER_END_OF_TLV) {
+            err = MATTER_NO_ERROR;
+            break;
+        }
+        SuccessOrExit(err);
+
+        const uint64_t tag = tlvDissector.GetTag();
+        if (!IsContextTag(tag)) {
+            err = tlvDissector.AddGenericTLVItem(itemTree, hf_ImCommon_Unknown, tvb, false);
+            SuccessOrExit(err);
+            continue;
+        }
+
+        switch (TagNumFromTag(tag)) {
+        case 0:
+            if (tlvDissector.GetType() == kTLVType_Structure) {
+                err = AddAttributeStatusIBItem(tlvDissector, itemTree, tvb);
+            }
+            else {
+                err = tlvDissector.AddGenericTLVItem(itemTree, hf_ImCommon_Unknown, tvb, false);
+            }
+            SuccessOrExit(err);
+            break;
+        case 1:
+            if (tlvDissector.GetType() == kTLVType_Structure) {
+                err = AddAttributeDataIBItem(tlvDissector, itemTree, tvb);
+            }
+            else {
+                err = tlvDissector.AddGenericTLVItem(itemTree, hf_ImCommon_Unknown, tvb, false);
+            }
+            SuccessOrExit(err);
+            break;
+        default:
+            err = tlvDissector.AddGenericTLVItem(itemTree, hf_ImCommon_Unknown, tvb, false);
+            SuccessOrExit(err);
+            break;
+        }
+    }
+
+    err = tlvDissector.ExitContainer();
+    SuccessOrExit(err);
+
+exit:
+    return err;
 }
 } // namespace
 
@@ -634,7 +896,10 @@ DissectIMStatusResponse(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_,
                 hf_entry = hf_ImCommon_Unknown;
                 break;
         }
-        SuccessOrExit(err = tlvDissector.AddGenericTLVItem(tree, hf_entry, tvb, false));
+        if (hf_entry != -1)
+        {
+            SuccessOrExit(err = tlvDissector.AddGenericTLVItem(tree, hf_entry, tvb, false));
+        }
 
     }
 
@@ -703,7 +968,16 @@ DissectIMReadRequest(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, co
                 break;
 
             case ReadRequest::kTag_EventFilters:
-                hf_entry = hf_ReadRequest_EventFilters;
+                if (tlvDissector.GetType() == kTLVType_Array || tlvDissector.GetType() == kTLVType_Path)
+                {
+                    hf_entry = -1;
+                    err = tlvDissector.AddListItem(tree, hf_ReadRequest_EventFilters, ett_DataElem, tvb, AddEventFilterIBItem);
+                    SuccessOrExit(err);
+                }
+                else
+                {
+                    hf_entry = hf_ReadRequest_EventFilters;
+                }
                 break;
 
             case ReadRequest::kTag_IsFabricFiltered:
@@ -711,7 +985,16 @@ DissectIMReadRequest(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, co
                 break;
 
             case ReadRequest::kTag_DataVersionFilters:
-                hf_entry = hf_ReadRequest_DataVersionFilters;
+                if (tlvDissector.GetType() == kTLVType_Array || tlvDissector.GetType() == kTLVType_Path)
+                {
+                    hf_entry = -1;
+                    err = tlvDissector.AddListItem(tree, hf_ReadRequest_DataVersionFilters, ett_DataElem, tvb, AddDataVersionFilterIBItem);
+                    SuccessOrExit(err);
+                }
+                else
+                {
+                    hf_entry = hf_ReadRequest_DataVersionFilters;
+                }
                 break;
 
             case CommonActionInfo::kTag_InteractionModelRevision: 
@@ -774,7 +1057,7 @@ DissectIMReportData(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, con
                 if (tlvDissector.GetType() == kTLVType_Array || tlvDissector.GetType() == kTLVType_Path)
                 {
                     hf_entry = -1;
-                    err = tlvDissector.AddListItem(tree, hf_ReportData_AttributeReports, ett_DataElem, tvb, AddAttributeDataIBItem);
+                    err = tlvDissector.AddListItem(tree, hf_ReportData_AttributeReports, ett_DataElem, tvb, AddAttributeReportIBItem);
                     SuccessOrExit(err);
                 }
                 else
@@ -895,7 +1178,16 @@ DissectIMSubscribeRequest(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U
                 break;
 
             case SubscribeRequest::kTag_EventFilters:
-                hf_entry = hf_SubscribeRequest_EventFilters;
+                if (tlvDissector.GetType() == kTLVType_Array || tlvDissector.GetType() == kTLVType_Path)
+                {
+                    hf_entry = -1;
+                    err = tlvDissector.AddListItem(tree, hf_SubscribeRequest_EventFilters, ett_DataElem, tvb, AddEventFilterIBItem);
+                    SuccessOrExit(err);
+                }
+                else
+                {
+                    hf_entry = hf_SubscribeRequest_EventFilters;
+                }
                 break;
 
             case SubscribeRequest::kTag_IsFabricFiltered:
@@ -903,7 +1195,16 @@ DissectIMSubscribeRequest(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U
                 break;
 
             case SubscribeRequest::kTag_DataVersionFilters:
-                hf_entry = hf_SubscribeRequest_DataVersionFilters;
+                if (tlvDissector.GetType() == kTLVType_Array || tlvDissector.GetType() == kTLVType_Path)
+                {
+                    hf_entry = -1;
+                    err = tlvDissector.AddListItem(tree, hf_SubscribeRequest_DataVersionFilters, ett_DataElem, tvb, AddDataVersionFilterIBItem);
+                    SuccessOrExit(err);
+                }
+                else
+                {
+                    hf_entry = hf_SubscribeRequest_DataVersionFilters;
+                }
                 break;
 
             case CommonActionInfo::kTag_InteractionModelRevision: 
@@ -974,7 +1275,10 @@ DissectIMSubscribeResponse(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _
                 hf_entry = hf_ImCommon_Unknown;
                 break;
         }
-        SuccessOrExit(err = tlvDissector.AddGenericTLVItem(tree, hf_entry, tvb, false));
+        if (hf_entry != -1)
+        {
+            SuccessOrExit(err = tlvDissector.AddGenericTLVItem(tree, hf_entry, tvb, false));
+        }
 
     }
 
@@ -1093,7 +1397,7 @@ DissectIMWriteResponse(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, 
                 if (tlvDissector.GetType() == kTLVType_Array || tlvDissector.GetType() == kTLVType_Path)
                 {
                     hf_entry = -1;
-                    err = tlvDissector.AddListItem(tree, hf_WriteResponse_WriteResponses, ett_DataElem, tvb, AddAttributeDataIBItem);
+                    err = tlvDissector.AddListItem(tree, hf_WriteResponse_WriteResponses, ett_DataElem, tvb, AddAttributeStatusIBItem);
                     SuccessOrExit(err);
                 }
                 else
@@ -1387,7 +1691,7 @@ proto_register_matter_im(void)
         },
         { &hf_ReadRequest_EventFilters,
             { "EventFilters", "im.read_req.event_filters",
-            FT_STRING, BASE_NONE, NULL, 0x0, NULL, HFILL }
+            FT_NONE, BASE_NONE, NULL, 0x0, NULL, HFILL }
         },
         { &hf_ReadRequest_IsFabricFiltered,
             { "IsFabricFiltered", "im.read_req.is_fabric_filtered",
@@ -1395,7 +1699,7 @@ proto_register_matter_im(void)
         },
         { &hf_ReadRequest_DataVersionFilters,
             { "DataVersionFilters", "im.read_req.data_version_filters",
-            FT_STRING, BASE_NONE, NULL, 0x0, NULL, HFILL }
+            FT_NONE, BASE_NONE, NULL, 0x0, NULL, HFILL }
         },
 
         // ===== Report Data =====
@@ -1467,7 +1771,7 @@ proto_register_matter_im(void)
         },
         { &hf_SubscribeRequest_EventFilters,
             { "EventFilters", "im.sub_req.EventFilters",
-            FT_STRING, BASE_NONE, NULL, 0x0, NULL, HFILL }
+            FT_NONE, BASE_NONE, NULL, 0x0, NULL, HFILL }
         },
         { &hf_SubscribeRequest_IsFabricFiltered,
             { "IsFabricFiltered", "im.sub_req.IsFabricFiltered",
@@ -1475,7 +1779,7 @@ proto_register_matter_im(void)
         },
         { &hf_SubscribeRequest_DataVersionFilters,
             { "DataVersionFilters", "im.sub_req.DataVersionFilters",
-            FT_STRING, BASE_NONE, NULL, 0x0, NULL, HFILL }
+            FT_NONE, BASE_NONE, NULL, 0x0, NULL, HFILL }
         },
 
         // ===== Subscribe Response =====
