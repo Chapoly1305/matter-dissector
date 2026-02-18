@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <inttypes.h>
 #include <stdio.h>
+#include <string>
 
 #include <glib.h>
 
@@ -116,6 +117,225 @@ static int hf_TimedRequest_TimeoutMs = -1;
 static int hf_DataElem_PropertyPath = -1;
 static int hf_DataElem_PropertyData = -1;
 
+namespace
+{
+constexpr uint32_t kClusterId_OnOff = 0x00000006;
+
+const char * GetClusterNameById(uint32_t clusterId)
+{
+    switch (clusterId)
+    {
+    case kClusterId_OnOff:
+        return "OnOff";
+    default:
+        return nullptr;
+    }
+}
+
+const char * GetCommandNameById(uint32_t clusterId, uint32_t commandId)
+{
+    if (clusterId == kClusterId_OnOff)
+    {
+        switch (commandId)
+        {
+        case 0x00: return "Off";
+        case 0x01: return "On";
+        case 0x02: return "Toggle";
+        case 0x40: return "OffWithEffect";
+        case 0x41: return "OnWithRecallGlobalScene";
+        case 0x42: return "OnWithTimedOff";
+        default: return nullptr;
+        }
+    }
+    return nullptr;
+}
+
+const char * GetAttributeNameById(uint32_t clusterId, uint32_t attributeId)
+{
+    if (clusterId == kClusterId_OnOff)
+    {
+        switch (attributeId)
+        {
+        case 0x0000: return "OnOff";
+        case 0x4000: return "GlobalSceneControl";
+        case 0x4001: return "OnTime";
+        case 0x4002: return "OffWaitTime";
+        case 0x4003: return "StartUpOnOff";
+        default: return nullptr;
+        }
+    }
+    return nullptr;
+}
+
+const char * GetEventNameById(uint32_t clusterId, uint32_t eventId)
+{
+    (void) clusterId;
+    (void) eventId;
+    return nullptr;
+}
+
+enum class PathKind
+{
+    Command,
+    Attribute,
+    Event,
+};
+
+static MATTER_ERROR AddNamedPathItem(TLVDissector & tlvDissector, proto_tree * tree, tvbuff_t * tvb, PathKind kind)
+{
+    MATTER_ERROR err = MATTER_NO_ERROR;
+    bool endpointPresent = false;
+    bool clusterPresent = false;
+    bool itemPresent = false;
+    uint32_t endpointId = 0;
+    uint32_t clusterId = 0;
+    uint32_t itemId = 0;
+    const char *itemLabel = "Field";
+
+    VerifyOrExit(tlvDissector.GetType() == kTLVType_Path || tlvDissector.GetType() == kTLVType_Structure,
+                 err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+
+    err = tlvDissector.EnterContainer();
+    SuccessOrExit(err);
+
+    while (true)
+    {
+        err = tlvDissector.Next();
+        if (err == MATTER_END_OF_TLV)
+        {
+            err = MATTER_NO_ERROR;
+            break;
+        }
+        SuccessOrExit(err);
+
+        const uint64_t tag = tlvDissector.GetTag();
+        const TLVType type = tlvDissector.GetType();
+        if (!IsContextTag(tag) || type != kTLVType_UnsignedInteger)
+        {
+            continue;
+        }
+
+        const uint32_t tagNum = TagNumFromTag(tag);
+        uint64_t value = 0;
+        err = tlvDissector.Get(value);
+        SuccessOrExit(err);
+
+        if (!endpointPresent && (tagNum == 0 || tagNum == 1))
+        {
+            endpointId = static_cast<uint32_t>(value);
+            endpointPresent = true;
+            continue;
+        }
+
+        if (!clusterPresent && (tagNum == 1 || tagNum == 2))
+        {
+            clusterId = static_cast<uint32_t>(value);
+            clusterPresent = true;
+            continue;
+        }
+
+        if (!itemPresent && (tagNum == 2 || tagNum == 3))
+        {
+            itemId = static_cast<uint32_t>(value);
+            itemPresent = true;
+            continue;
+        }
+    }
+
+    err = tlvDissector.ExitContainer();
+    SuccessOrExit(err);
+
+    switch (kind)
+    {
+    case PathKind::Command:
+        itemLabel = "Command";
+        break;
+    case PathKind::Attribute:
+        itemLabel = "Attribute";
+        break;
+    case PathKind::Event:
+        itemLabel = "Event";
+        break;
+    }
+
+    {
+        std::string out;
+        if (endpointPresent)
+        {
+            char buf[48];
+            snprintf(buf, sizeof(buf), "Endpoint=0x%X", endpointId);
+            out += buf;
+        }
+
+        if (clusterPresent)
+        {
+            const char *clusterName = GetClusterNameById(clusterId);
+            char buf[96];
+            snprintf(buf, sizeof(buf), "%sCluster=0x%X%s%s",
+                     out.empty() ? "" : ", ",
+                     clusterId,
+                     (clusterName != nullptr) ? " (" : "",
+                     (clusterName != nullptr) ? clusterName : "");
+            out += buf;
+            if (clusterName != nullptr)
+            {
+                out += ")";
+            }
+        }
+
+        if (itemPresent)
+        {
+            const char *itemName = nullptr;
+            if (kind == PathKind::Command)
+            {
+                itemName = GetCommandNameById(clusterId, itemId);
+            }
+            else if (kind == PathKind::Attribute)
+            {
+                itemName = GetAttributeNameById(clusterId, itemId);
+            }
+            else
+            {
+                itemName = GetEventNameById(clusterId, itemId);
+            }
+
+            char buf[128];
+            snprintf(buf, sizeof(buf), "%s%s=0x%X%s%s",
+                     out.empty() ? "" : ", ",
+                     itemLabel,
+                     itemId,
+                     (itemName != nullptr) ? " (" : "",
+                     (itemName != nullptr) ? itemName : "");
+            out += buf;
+            if (itemName != nullptr)
+            {
+                out += ")";
+            }
+        }
+
+        if (out.empty())
+        {
+            out = "Unknown Path";
+        }
+        err = tlvDissector.AddStringItemF(tree, hf_DataElem_PropertyPath, tvb, "%s", out.c_str());
+        SuccessOrExit(err);
+    }
+
+exit:
+    return err;
+}
+
+static MATTER_ERROR AddAttributePathItem(TLVDissector & tlvDissector, proto_tree * tree, tvbuff_t * tvb)
+{
+    return AddNamedPathItem(tlvDissector, tree, tvb, PathKind::Attribute);
+}
+
+static MATTER_ERROR AddEventPathItem(TLVDissector & tlvDissector, proto_tree * tree, tvbuff_t * tvb)
+{
+    return AddNamedPathItem(tlvDissector, tree, tvb, PathKind::Event);
+}
+} // namespace
+
 void AssociateWithIMSubscription(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, MatterMessageRecord *msgRec)
 {
     if (msgRec->imSubscription == 0) {
@@ -213,8 +433,8 @@ AddCommandDataIB(TLVDissector& tlvDissector, proto_tree *tree, tvbuff_t* tvb)
         tag = TagNumFromTag(tag);
         switch (tag) {
         case CommandDataIB::kTag_Path:
-            VerifyOrExit(type == kTLVType_Path, err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
-            err = tlvDissector.AddIMPathItem(dataElemTree, hf_DataElem_PropertyPath, tvb);
+            VerifyOrExit(type == kTLVType_Path || type == kTLVType_Structure, err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+            err = AddNamedPathItem(tlvDissector, dataElemTree, tvb, PathKind::Command);
             SuccessOrExit(err);
             break;
         case CommandDataIB::kTag_Data:
@@ -259,7 +479,7 @@ AddCommandStatusIB(TLVDissector& tlvDissector, proto_tree *tree, tvbuff_t* tvb)
 
         switch (TagNumFromTag(tag)) {
         case CommandStatusIB::kTag_Path:
-            err = tlvDissector.AddIMPathItem(statusTree, hf_DataElem_PropertyPath, tvb);
+            err = AddNamedPathItem(tlvDissector, statusTree, tvb, PathKind::Command);
             break;
         case CommandStatusIB::kTag_Status:
             err = AddStatusIB(tlvDissector, statusTree, tvb);
@@ -413,11 +633,29 @@ DissectIMReadRequest(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, co
         tag = TagNumFromTag(tag);
         switch (tag) {
             case ReadRequest::kTag_AttributeRequests:
-                hf_entry = hf_ReadRequest_AttributeRequests;
+                if (tlvDissector.GetType() == kTLVType_Array || tlvDissector.GetType() == kTLVType_Path)
+                {
+                    hf_entry = -1;
+                    err = tlvDissector.AddListItem(tree, hf_ReadRequest_AttributeRequests, ett_SubscribeRequest_PathList, tvb, AddAttributePathItem);
+                    SuccessOrExit(err);
+                }
+                else
+                {
+                    hf_entry = hf_ReadRequest_AttributeRequests;
+                }
                 break;
 
             case ReadRequest::kTag_EventRequests:
-                hf_entry = hf_ReadRequest_EventRequests;
+                if (tlvDissector.GetType() == kTLVType_Array || tlvDissector.GetType() == kTLVType_Path)
+                {
+                    hf_entry = -1;
+                    err = tlvDissector.AddListItem(tree, hf_ReadRequest_EventRequests, ett_SubscribeRequest_PathList, tvb, AddEventPathItem);
+                    SuccessOrExit(err);
+                }
+                else
+                {
+                    hf_entry = hf_ReadRequest_EventRequests;
+                }
                 break;
 
             case ReadRequest::kTag_EventFilters:
@@ -440,7 +678,10 @@ DissectIMReadRequest(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, co
                 hf_entry = hf_ImCommon_Unknown;
                 break;
         }
-        SuccessOrExit(err = tlvDissector.AddGenericTLVItem(tree, hf_entry, tvb, false));
+        if (hf_entry != -1)
+        {
+            SuccessOrExit(err = tlvDissector.AddGenericTLVItem(tree, hf_entry, tvb, false));
+        }
 
     }
 
@@ -563,11 +804,29 @@ DissectIMSubscribeRequest(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U
                 break;
 
             case SubscribeRequest::kTag_AttributeRequests:
-                hf_entry = hf_SubscribeRequest_AttributeRequests;
+                if (tlvDissector.GetType() == kTLVType_Array || tlvDissector.GetType() == kTLVType_Path)
+                {
+                    hf_entry = -1;
+                    err = tlvDissector.AddListItem(tree, hf_SubscribeRequest_AttributeRequests, ett_SubscribeRequest_PathList, tvb, AddAttributePathItem);
+                    SuccessOrExit(err);
+                }
+                else
+                {
+                    hf_entry = hf_SubscribeRequest_AttributeRequests;
+                }
                 break;
 
             case SubscribeRequest::kTag_EventRequests:
-                hf_entry = hf_SubscribeRequest_EventRequests;
+                if (tlvDissector.GetType() == kTLVType_Array || tlvDissector.GetType() == kTLVType_Path)
+                {
+                    hf_entry = -1;
+                    err = tlvDissector.AddListItem(tree, hf_SubscribeRequest_EventRequests, ett_SubscribeRequest_PathList, tvb, AddEventPathItem);
+                    SuccessOrExit(err);
+                }
+                else
+                {
+                    hf_entry = hf_SubscribeRequest_EventRequests;
+                }
                 break;
 
             case SubscribeRequest::kTag_EventFilters:
@@ -590,7 +849,10 @@ DissectIMSubscribeRequest(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U
                 hf_entry = hf_ImCommon_Unknown;
                 break;
         }
-        SuccessOrExit(err = tlvDissector.AddGenericTLVItem(tree, hf_entry, tvb, false));
+        if (hf_entry != -1)
+        {
+            SuccessOrExit(err = tlvDissector.AddGenericTLVItem(tree, hf_entry, tvb, false));
+        }
 
     }
 
@@ -1034,11 +1296,11 @@ proto_register_matter_im(void)
         // ===== Read Request =====
         { &hf_ReadRequest_AttributeRequests,
             { "AttributeRequests", "im.read_req.attr_reqs",
-            FT_STRING, BASE_NONE, NULL, 0x0, NULL, HFILL }
+            FT_NONE, BASE_NONE, NULL, 0x0, NULL, HFILL }
         },
         { &hf_ReadRequest_EventRequests,
             { "EventRequests", "im.read_req.event_reqs",
-            FT_STRING, BASE_NONE, NULL, 0x0, NULL, HFILL }
+            FT_NONE, BASE_NONE, NULL, 0x0, NULL, HFILL }
         },
         { &hf_ReadRequest_EventFilters,
             { "EventFilters", "im.read_req.event_filters",
@@ -1114,11 +1376,11 @@ proto_register_matter_im(void)
         },
         { &hf_SubscribeRequest_AttributeRequests,
             { "AttributeRequests", "im.sub_req.AttributeRequests",
-            FT_STRING, BASE_NONE, NULL, 0x0, NULL, HFILL }
+            FT_NONE, BASE_NONE, NULL, 0x0, NULL, HFILL }
         },
         { &hf_SubscribeRequest_EventRequests,
             { "EventRequests", "im.sub_req.EventRequests",
-            FT_STRING, BASE_NONE, NULL, 0x0, NULL, HFILL }
+            FT_NONE, BASE_NONE, NULL, 0x0, NULL, HFILL }
         },
         { &hf_SubscribeRequest_EventFilters,
             { "EventFilters", "im.sub_req.EventFilters",
