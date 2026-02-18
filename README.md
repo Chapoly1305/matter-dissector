@@ -55,18 +55,19 @@ Users should also be aware that the Matter dissector may have bugs that may caus
 
 
 ## Installation
-The current version of the Matter Wireshark plugin only runs on linux and requires Wireshark 4.2, does NOT work on 4.4 yet.
+The current version of the Matter Wireshark plugin in this workspace targets **Wireshark 4.6.3** on Linux.
+Support for the old 4.2 workspace has been dropped in this branch.
 
 Installing the Wireshark plugin is as simple as copying the shared library file into your local plugins directory:
 
-    mkdir -p ${HOME}/.local/lib/wireshark/plugins/4.2/epan
-    cp matter-dissector.so ${HOME}.local/lib/wireshark/plugins/4.2/epan
-    chmod 700 ${HOME}/.local/lib/wireshark/plugins/4.2/epan/matter-dissector.so
+    mkdir -p ${HOME}/.local/lib/wireshark/plugins/4.6/epan
+    cp matter-dissector.so ${HOME}/.local/lib/wireshark/plugins/4.6/epan
+    chmod 700 ${HOME}/.local/lib/wireshark/plugins/4.6/epan/matter-dissector.so
 
 ## Bulding the Matter Wireshark Plugin
 
 ### Build Wireshark
-Again, you need to use exact Wireshark 4.2, the 4.4 is known not compatiable.
+Use Wireshark **release-4.6.3** for this workspace.
 
 You may refer to [syneart/build_wireshark.sh](https://gist.github.com/syneart/2d30c075c140624b1e150c8ea318a978) to prepare the build environment. The script is not maintained by me, so use it with caution.
 
@@ -74,7 +75,7 @@ Building the Matter Wireshark plugin requires access to a Wireshark source tree 
 
     git clone https://gitlab.com/wireshark/wireshark.git
     cd wireshark
-    git checkout release-4.2
+    git checkout release-4.6.3
     mkdir build
     cd build
     cmake ..
