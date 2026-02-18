@@ -329,6 +329,55 @@ static MATTER_ERROR AddEventPathItem(TLVDissector & tlvDissector, proto_tree * t
 {
     return AddNamedPathItem(tlvDissector, tree, tvb, PathKind::Event);
 }
+
+static MATTER_ERROR AddNamedStructItem(TLVDissector & tlvDissector, proto_tree * tree, tvbuff_t * tvb, PathKind kind)
+{
+    MATTER_ERROR err = MATTER_NO_ERROR;
+    proto_tree * itemTree = nullptr;
+
+    VerifyOrExit(tlvDissector.GetType() == kTLVType_Structure, err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+    err = tlvDissector.AddSubTreeItem(tree, hf_DataElem_PropertyData, ett_DataElem, tvb, itemTree);
+    SuccessOrExit(err);
+
+    err = tlvDissector.EnterContainer();
+    SuccessOrExit(err);
+
+    while (true) {
+        err = tlvDissector.Next();
+        if (err == MATTER_END_OF_TLV) {
+            err = MATTER_NO_ERROR;
+            break;
+        }
+        SuccessOrExit(err);
+
+        const TLVType type = tlvDissector.GetType();
+        if (type == kTLVType_Path || type == kTLVType_Structure) {
+            MATTER_ERROR pathErr = AddNamedPathItem(tlvDissector, itemTree, tvb, kind);
+            if (pathErr == MATTER_NO_ERROR) {
+                continue;
+            }
+        }
+
+        err = tlvDissector.AddGenericTLVItem(itemTree, hf_DataElem_PropertyData, tvb, false);
+        SuccessOrExit(err);
+    }
+
+    err = tlvDissector.ExitContainer();
+    SuccessOrExit(err);
+
+exit:
+    return err;
+}
+
+static MATTER_ERROR AddAttributeDataIBItem(TLVDissector & tlvDissector, proto_tree * tree, tvbuff_t * tvb)
+{
+    return AddNamedStructItem(tlvDissector, tree, tvb, PathKind::Attribute);
+}
+
+static MATTER_ERROR AddEventReportIBItem(TLVDissector & tlvDissector, proto_tree * tree, tvbuff_t * tvb)
+{
+    return AddNamedStructItem(tlvDissector, tree, tvb, PathKind::Event);
+}
 } // namespace
 
 void AssociateWithIMSubscription(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, MatterMessageRecord *msgRec)
@@ -722,11 +771,29 @@ DissectIMReportData(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, con
                 break;
 
             case ReportData::kTag_AttributeReports:
-                hf_entry = hf_ReportData_AttributeReports;
+                if (tlvDissector.GetType() == kTLVType_Array || tlvDissector.GetType() == kTLVType_Path)
+                {
+                    hf_entry = -1;
+                    err = tlvDissector.AddListItem(tree, hf_ReportData_AttributeReports, ett_DataElem, tvb, AddAttributeDataIBItem);
+                    SuccessOrExit(err);
+                }
+                else
+                {
+                    hf_entry = hf_ReportData_AttributeReports;
+                }
                 break;
 
             case ReportData::kTag_EventReports:
-                hf_entry = hf_ReportData_EventReports;
+                if (tlvDissector.GetType() == kTLVType_Array || tlvDissector.GetType() == kTLVType_Path)
+                {
+                    hf_entry = -1;
+                    err = tlvDissector.AddListItem(tree, hf_ReportData_EventReports, ett_DataElem, tvb, AddEventReportIBItem);
+                    SuccessOrExit(err);
+                }
+                else
+                {
+                    hf_entry = hf_ReportData_EventReports;
+                }
                 break;
 
             case ReportData::kTag_MoreChunkedMessages:
@@ -745,7 +812,10 @@ DissectIMReportData(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, con
                 hf_entry = hf_ImCommon_Unknown;
                 break;
         }
-        SuccessOrExit(err = tlvDissector.AddGenericTLVItem(tree, hf_entry, tvb, false));
+        if (hf_entry != -1)
+        {
+            SuccessOrExit(err = tlvDissector.AddGenericTLVItem(tree, hf_entry, tvb, false));
+        }
 
     }
 
@@ -954,7 +1024,16 @@ DissectIMWriteRequest(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, c
                 break;
 
             case WriteRequest::kTag_WriteRequests:
-                hf_entry = hf_WriteRequest_WriteRequests;
+                if (tlvDissector.GetType() == kTLVType_Array || tlvDissector.GetType() == kTLVType_Path)
+                {
+                    hf_entry = -1;
+                    err = tlvDissector.AddListItem(tree, hf_WriteRequest_WriteRequests, ett_DataElem, tvb, AddAttributeDataIBItem);
+                    SuccessOrExit(err);
+                }
+                else
+                {
+                    hf_entry = hf_WriteRequest_WriteRequests;
+                }
                 break;
 
             case WriteRequest::kTag_MoreChunkedMessages:
@@ -1011,7 +1090,16 @@ DissectIMWriteResponse(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, 
 
         switch (tag) {
             case WriteResponse::kTag_WriteResponses:
-                hf_entry = hf_WriteResponse_WriteResponses;
+                if (tlvDissector.GetType() == kTLVType_Array || tlvDissector.GetType() == kTLVType_Path)
+                {
+                    hf_entry = -1;
+                    err = tlvDissector.AddListItem(tree, hf_WriteResponse_WriteResponses, ett_DataElem, tvb, AddAttributeDataIBItem);
+                    SuccessOrExit(err);
+                }
+                else
+                {
+                    hf_entry = hf_WriteResponse_WriteResponses;
+                }
                 break;
 
             case CommonActionInfo::kTag_InteractionModelRevision: 
@@ -1317,11 +1405,11 @@ proto_register_matter_im(void)
         },
         { &hf_ReportData_AttributeReports,
             { "AttributeReports", "im.report_data.AttributeReports",
-            FT_STRING, BASE_NONE, NULL, 0x0, NULL, HFILL }
+            FT_NONE, BASE_NONE, NULL, 0x0, NULL, HFILL }
         },
         { &hf_ReportData_EventReports,
             { "EventReports", "im.report_data.EventReports",
-            FT_STRING, BASE_NONE, NULL, 0x0, NULL, HFILL }
+            FT_NONE, BASE_NONE, NULL, 0x0, NULL, HFILL }
         },
         { &hf_ReportData_MoreChunkedMessages,
             { "MoreChunkedMessages", "im.report_data.MoreChunkedMessages",
@@ -1343,7 +1431,7 @@ proto_register_matter_im(void)
         },
         { &hf_WriteRequest_WriteRequests,
             { "WriteRequests", "im.write_req.WriteRequests",
-            FT_STRING, BASE_NONE, NULL, 0x0, NULL, HFILL }
+            FT_NONE, BASE_NONE, NULL, 0x0, NULL, HFILL }
         },
         { &hf_WriteRequest_MoreChunkedMessages,
             { "MoreChunkedMessages", "im.write_req.MoreChunkedMessages",
@@ -1353,7 +1441,7 @@ proto_register_matter_im(void)
         // ===== Write Response =====
         { &hf_WriteResponse_WriteResponses,
             { "WriteResponses", "im.write_rsp.WriteResponses",
-            FT_STRING, BASE_NONE, NULL, 0x0, NULL, HFILL }
+            FT_NONE, BASE_NONE, NULL, 0x0, NULL, HFILL }
         },
 
         // ===== Subscribe Request =====
