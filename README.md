@@ -24,19 +24,19 @@ The Matter Wireshark dissector recognizes protocol opcodes for many of the curre
 
 * Matter Secure Channel Protocol (aka Common Profile)
   - [X] MRP Ack and StatusReport messages
-  - [ ] Matter MessageCounterSync and KeyError messages
+  - [X] Matter MessageCounterSync and KeyError messages
   - [X] Matter CASE / PASE
     * All session establishment messages
     * Limited support for displaying Matter certificates
 - [X] Matter Echo Profile (all messages)
 - [ ] Interaction Model Protocol (all IM messages)
     - [X] Command Request / Response
-    - [ ] Attribute Read
-    - [ ] Attribute Write
-    - [ ] Subscribe
-    - [ ] Events
+    - [X] Attribute Read
+    - [X] Attribute Write
+    - [X] Subscribe
+    - [X] Events
 - Cluster Support
-    - [ ] User Directed Commissioning [UDC]
+    - [X] User Directed Commissioning [UDC]
     - [ ] On/Off
     ...
 ### Security Features
