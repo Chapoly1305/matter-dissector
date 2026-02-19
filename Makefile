@@ -2,21 +2,22 @@ PLUGIN_NAME = matter-dissector
 
 # Example for RasPi: CROSS_COMPILE=arm-linux-gnueabihf- make
 CROSS_COMPILE ?=
+UNAME_S := $(shell uname -s)
 
 ifeq ($(UNAME_S),Darwin)
-CC  = $(CROSS_COMPILE)llvm-gcc
-CPP = $(CROSS_COMPILE)llvm-g++
-LD  = $(CROSS_COMPILE)ld
+CC  ?= $(CROSS_COMPILE)clang
+CXX ?= $(CROSS_COMPILE)clang++
+LD  ?= $(CXX)
 AR  = $(CROSS_COMPILE)ar
 else
-CC  = $(CROSS_COMPILE)gcc
-CPP = $(CROSS_COMPILE)g++
-LD  = $(CROSS_COMPILE)g++
+CC  ?= $(CROSS_COMPILE)gcc
+CXX ?= $(CROSS_COMPILE)g++
+LD  ?= $(CXX)
 AR  = $(CROSS_COMPILE)ar
 endif
 
 #CC  = $(CROSS_COMPILE)clang
-#CPP = $(CROSS_COMPILE)clang++
+#CXX = $(CROSS_COMPILE)clang++
 #LD  = $(CROSS_COMPILE)ld
 #AR  = $(CROSS_COMPILE)llvm-ar
 
@@ -24,8 +25,6 @@ WIRESHARK_SRC_DIR ?= ../wireshark-4.6.3
 WIRESHARK_BUILD_DIR ?= $(WIRESHARK_SRC_DIR)/build
 WIRESHARK_INCLUDE_DIR ?= $(WIRESHARK_SRC_DIR)/include
 WIRESHARK_UTIL_DIR ?= $(WIRESHARK_SRC_DIR)/wsutil
-
-UNAME_S := $(shell uname -s)
 
 WIRESHARK_CFLAGS = -I$(WIRESHARK_SRC_DIR) -I$(WIRESHARK_BUILD_DIR) -I$(WIRESHARK_INCLUDE_DIR) -I$(WIRESHARK_UTIL_DIR)
 
@@ -61,16 +60,23 @@ OPT_FLAGS ?= -g3 -O0
 WARN_FLAGS ?= -Wall
 
 CFLAGS = -ffunction-sections -fdata-sections $(GLIB_CFLAGS) $(OPENSSL_CFLAGS) $(WIRESHARK_CFLAGS) $(MATTER_CFLAGS) $(WARN_FLAGS) $(OPT_FLAGS) -fPIC -DPIC
-CPPFLAGS = $(CFLAGS)
+CXXFLAGS = $(CFLAGS) -std=c++11
 
 LDFLAGS = $(GLIB_LDFLAGS) $(WIRESHARK_LDFLAGS) $(MATTER_LDFLAGS) $(OPENSSL_LDFLAGS) $(OPT_FLAGS) -lstdc++
 
 ifeq ($(UNAME_S),Darwin)
-PLUGIN_OUT = matter-dissector.dylib
-LDFLAGS += -Wl,-install_name=$(PLUGIN_NAME).dylib
+PLUGIN_OUT = matter-dissector.so
+LDFLAGS += -Wl,-install_name,$(PLUGIN_NAME).so -Wl,-undefined,dynamic_lookup
 else
 PLUGIN_OUT = matter-dissector.so
 LDFLAGS += -Wl,-soname=$(PLUGIN_NAME).so -Wl,-Map -Wl,$(PLUGIN_NAME).map -Wl,--cref -Wl,--exclude-libs=ALL -Wl,--gc-sections
+endif
+
+WIRESHARK_PLUGIN_VER ?= 4-6
+ifeq ($(UNAME_S),Darwin)
+INSTALL_PLUGIN_DIR ?= $(WIRESHARK_BUILD_DIR)/run/Wireshark.app/Contents/PlugIns/wireshark/$(WIRESHARK_PLUGIN_VER)/epan
+else
+INSTALL_PLUGIN_DIR ?= ~/.local/lib/wireshark/plugins/$(WIRESHARK_PLUGIN_VER)/epan
 endif
 
 DISSECTOR_SRCS := packet-matter.cpp packet-matter-decrypt.cpp packet-matter-echo.cpp packet-matter-common.cpp packet-matter-im.cpp packet-matter-security.cpp packet-matter-udc.cpp
@@ -96,7 +102,7 @@ TEST_EXES := $(patsubst %.o, %.exe,$(filter %.o,  $(TEST_OBJS)))
 all : $(PLUGIN_OUT)
 
 $(PLUGIN_OUT) : $(OBJS) $(SRCS) $(HEADERS)
-	$(CC) -shared $(OBJS) $(LDFLAGS) -o $@
+	$(CXX) -shared $(OBJS) $(LDFLAGS) -o $@
 
 #$(TEST_EXES) : $(TEST_OBJS)
 #	$(CC) $^ $(LDFLAGS) $(LIBS) -o $@
@@ -106,8 +112,8 @@ tests/test-packet-matter-decrypt.exe: tests/test-packet-matter-decrypt.o packet-
 
 
 install : $(PLUGIN_OUT)
-	mkdir -p ~/.local/lib/wireshark/plugins/4.6/epan
-	cp $(PLUGIN_OUT) ~/.local/lib/wireshark/plugins/4.6/epan
+	mkdir -p $(INSTALL_PLUGIN_DIR)
+	cp $(PLUGIN_OUT) $(INSTALL_PLUGIN_DIR)
 
 test : install
 	WIRESHARK_RUN_FROM_BUILD_DIRECTORY=1 $(WIRESHARK_BUILD_DIR)/run/wireshark $(TEST_INPUT)
@@ -125,14 +131,14 @@ check: install $(TEST_EXES)
 	tests/test-packet-matter-decrypt.exe
 
 clean :
-	rm -f $(OBJS) $(PLUGIN_NAME).so *.map tests/*.exe
+	rm -f $(OBJS) $(PLUGIN_NAME).so $(PLUGIN_NAME).dylib *.map tests/*.exe
 
 ### Generic rules based on extension
 %.o: %.c
 	$(CC) -c $(CFLAGS) $< -o $@
 
 %.o: %.cc
-	$(CPP) -c $(CFLAGS) $< -o $@
+	$(CXX) -c $(CXXFLAGS) $< -o $@
 
 %.o: %.cpp
-	$(CPP) -c $(CFLAGS) $< -o $@
+	$(CXX) -c $(CXXFLAGS) $< -o $@
