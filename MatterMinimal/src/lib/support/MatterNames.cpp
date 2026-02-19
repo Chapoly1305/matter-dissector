@@ -49,8 +49,8 @@ const char *GetVendorName(uint16_t vendorId)
 const char *GetProtocolName(uint32_t profileId)
 {
     switch (profileId) {
-    case kMatterProfile_Common                                               : return "Session";
-    case kMatterProfile_InteractionModel                                     : return "Action";
+    case kMatterProfile_Common                                               : return "SecureChannel";
+    case kMatterProfile_InteractionModel                                     : return "IM";
     case kMatterProfile_BDX                                                  : return "BDX (Bulk Data Exchange)";
     case kMatterProfile_UDC                                                  : return "UDC (User Directed Commissioning)";
     case kMatterProfile_Echo                                                 : return "Echo";
@@ -85,15 +85,16 @@ const char *GetMessageName(uint32_t profileId, uint8_t msgType)
 
         case Common::kMsgType_PBKDFParamRequest                             : return "PBKDFParamRequest";
         case Common::kMsgType_PBKDFParamResponse                            : return "PBKDFParamResponse";
-        case Common::kMsgType_PASE_Spake2p1                                 : return "PASE_Spake2p1";
-        case Common::kMsgType_PASE_Spake2p2                                 : return "PASE_Spake2p2";
-        case Common::kMsgType_PASE_Spake2p3                                 : return "PASE_Spake2p3";
+        case Common::kMsgType_PASE_Spake2p1                                 : return "PASE_Pake1";
+        case Common::kMsgType_PASE_Spake2p2                                 : return "PASE_Pake2";
+        case Common::kMsgType_PASE_Spake2p3                                 : return "PASE_Pake3";
         case Common::kMsgType_PASE_Spake2pError                             : return "PASE_Spake2pError";
 
         case Common::kMsgType_CASE_Sigma1                                   : return "CASE_Sigma1";
         case Common::kMsgType_CASE_Sigma2                                   : return "CASE_Sigma2";
         case Common::kMsgType_CASE_Sigma3                                   : return "CASE_Sigma3";
         case Common::kMsgType_CASE_Sigma2_Resume                            : return "CASE_Sigma2_Resume";
+        case Common::kMsgType_ICD_CheckIn                                   : return "ICD_CheckInMessage";
         }
         break;
 
@@ -123,6 +124,7 @@ const char *GetMessageName(uint32_t profileId, uint8_t msgType)
 
     case kMatterProfile_NetworkProvisioning:
         switch (msgType) {
+        case 0x00                                                           : return "IdentificationDeclaration";
         case NetworkProvisioning::kMsgType_ScanNetworks                     : return "ScanNetworks";
         case NetworkProvisioning::kMsgType_NetworkScanComplete              : return "NetworkScanComplete";
         case NetworkProvisioning::kMsgType_AddNetwork                       : return "AddNetwork";
@@ -209,11 +211,12 @@ const char *GetMessageName(uint32_t profileId, uint8_t msgType)
         case BDX_Development::kMsgType_BlockAck                             : return "BlockAck";
         case BDX_Development::kMsgType_BlockEOFAck                          : return "BlockEOFAck";
         case BDX_Development::kMsgType_TransferError                        : return "TransferError";
-        case BDX_Development::kMsgType_BlockQueryV1                         : return "BlockQueryV1";
-        case BDX_Development::kMsgType_BlockSendV1                          : return "BlockSendV1";
-        case BDX_Development::kMsgType_BlockEOFV1                           : return "BlockEOFV1";
-        case BDX_Development::kMsgType_BlockAckV1                           : return "BlockAckV1";
-        case BDX_Development::kMsgType_BlockEOFAckV1                        : return "BlockEOFAckV1";
+        case BDX_Development::kMsgType_BlockQueryV1                         : return "BlockQuery";
+        case BDX_Development::kMsgType_BlockSendV1                          : return "Block";
+        case BDX_Development::kMsgType_BlockEOFV1                           : return "BlockEOF";
+        case BDX_Development::kMsgType_BlockAckV1                           : return "BlockAck";
+        case BDX_Development::kMsgType_BlockEOFAckV1                        : return "BlockAckEOF";
+        case 0x15                                                           : return "BlockQueryWithSkip";
         }
         break;
     case kMatterProfile_DeviceDescription:

@@ -86,6 +86,7 @@ enum
 
     // Common control messages such as status
     kMsgType_StatusReport  = 0x40,
+    kMsgType_ICD_CheckIn   = 0x50,
 
     // ==== DEPRECATED BELOW THIS LINE =====
 

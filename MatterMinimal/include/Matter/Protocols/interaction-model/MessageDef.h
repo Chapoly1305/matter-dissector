@@ -231,6 +231,7 @@ namespace CommandStatusIB
     {
         kTag_Path                     = 0,   // CommandPathIB
         kTag_Status                   = 1,   // StatusIB
+        kTag_Ref                      = 2,   // uint16_t
     };
 };
 
@@ -241,6 +242,14 @@ namespace StatusIB
     {
         kTag_Status                     = 0,   // uint16_t
         kTag_ClusterStatus              = 1,   // uint16_t
+    };
+};
+
+namespace TimedRequest
+{
+    enum
+    {
+        kTag_TimeoutMs                = 0,   // uint16_t
     };
 };
 

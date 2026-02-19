@@ -24,21 +24,33 @@ The Matter Wireshark dissector recognizes protocol opcodes for many of the curre
 
 * Matter Secure Channel Protocol (aka Common Profile)
   - [X] MRP Ack and StatusReport messages
-  - [ ] Matter MessageCounterSync and KeyError messages
+  - [X] Matter MessageCounterSync and KeyError messages
   - [X] Matter CASE / PASE
     * All session establishment messages
-    * Limited support for displaying Matter certificates
+    * Matter operational certificate field decode (NOC/ICAC/Root CA)
+    * CASE/PASE parameter tag-name decode (PBKDF, Sigma, attestation/CSR containers)
 - [X] Matter Echo Profile (all messages)
-- [ ] Interaction Model Protocol (all IM messages)
+- [X] Interaction Model Protocol (all IM messages)
     - [X] Command Request / Response
-    - [ ] Attribute Read
-    - [ ] Attribute Write
-    - [ ] Subscribe
-    - [ ] Events
-- Cluster Support
-    - [ ] User Directed Commissioning [UDC]
-    - [ ] On/Off
-    ...
+    - [X] Attribute Read
+    - [X] Attribute Write
+    - [X] Subscribe
+    - [X] Events
+- [X] IM path name mapping for Matter v1.5 clusters
+    - [X] Cluster ID -> Name
+    - [X] Attribute ID -> Name
+    - [X] Command ID -> Name
+    - [X] Event ID -> Name
+- [X] IM generic payload decode for all Matter v1.5 clusters
+    - [X] Attribute payload generic TLV decode with struct/enum name mapping where available
+    - [X] Command payload generic TLV decode with request/response field-name mapping where available
+    - [X] Event payload generic TLV decode with field-name mapping where available
+- [X] Certificate and attestation payload deep decode in IM byte-string fields
+    - [X] `NOCValue` / `ICACValue` / `RootCACertificate`
+    - [X] `AttestationElements` / `NOCSRElements` / CSR decode
+    - [X] Certification Declaration CMS envelope + embedded content fields
+
+Detailed per-cluster completion status is auto-generated in `docs/CLUSTER_TODO.md`.
 ### Security Features
 
 The Matter Wireshark dissector contains a number of features that make debugging secure Matter interactions easier.  At the most basic level, the dissector supports automatic decryption of Matter messages using encryption keys that are manually entered by the user. This supports scenarios where one or both ends of a communication intentionally leak the keys for debugging purposes (e.g. via log messages). Encryption keys can be entered via the Matter preferences dialog, and persist across Wireshark sessions.
@@ -55,18 +67,24 @@ Users should also be aware that the Matter dissector may have bugs that may caus
 
 
 ## Installation
-The current version of the Matter Wireshark plugin only runs on linux and requires Wireshark 4.2, does NOT work on 4.4 yet.
+The current version of the Matter Wireshark plugin in this workspace targets **Wireshark 4.6.3** on Linux.
+Support for the old 4.2 workspace has been dropped in this branch.
+
+### Matter Baseline
+
+The ws-4.6.3 workspace is adapted against Project CHIP (`connectedhomeip`) **`v1.5-branch`**.
+Current baseline used during this adaptation: `v1.5-branch@d0538c5d`.
 
 Installing the Wireshark plugin is as simple as copying the shared library file into your local plugins directory:
 
-    mkdir -p ${HOME}/.local/lib/wireshark/plugins/4.2/epan
-    cp matter-dissector.so ${HOME}.local/lib/wireshark/plugins/4.2/epan
-    chmod 700 ${HOME}/.local/lib/wireshark/plugins/4.2/epan/matter-dissector.so
+    mkdir -p ${HOME}/.local/lib/wireshark/plugins/4.6/epan
+    cp matter-dissector.so ${HOME}/.local/lib/wireshark/plugins/4.6/epan
+    chmod 700 ${HOME}/.local/lib/wireshark/plugins/4.6/epan/matter-dissector.so
 
-## Bulding the Matter Wireshark Plugin
+## Building the Matter Wireshark Plugin
 
 ### Build Wireshark
-Again, you need to use exact Wireshark 4.2, the 4.4 is known not compatiable.
+Use Wireshark **release-4.6.3** for this workspace.
 
 You may refer to [syneart/build_wireshark.sh](https://gist.github.com/syneart/2d30c075c140624b1e150c8ea318a978) to prepare the build environment. The script is not maintained by me, so use it with caution.
 
@@ -74,7 +92,7 @@ Building the Matter Wireshark plugin requires access to a Wireshark source tree 
 
     git clone https://gitlab.com/wireshark/wireshark.git
     cd wireshark
-    git checkout release-4.2
+    git checkout release-4.6.3
     mkdir build
     cd build
     cmake ..
@@ -97,7 +115,7 @@ Once the Wireshark source is prepared, one can clone and build the Matter Wiresh
     cd matter-dissector
     WIRESHARK_SRC_DIR=<path to wireshark source directory> make
 
-Note that WIRESHARK_SRC_DIR defaults to "../wireshark".
+Note that WIRESHARK_SRC_DIR defaults to "../wireshark-4.6.3".
 
 ## Make command
 
@@ -186,6 +204,28 @@ In order to use the sniffer, one needs to install the encryption keys Matter nod
 4) Select [+]
 
 5) Enter a 128-bit key in hex (32 characters long) and hit return.
+
+#### MatterProxy key hint file (optional)
+
+For captures exported by MatterProxy workflows, you can also load key hints from a text file:
+
+1) Select Edit menu -> Preferences ...
+2) In tab to left, select Protocols -> Matter
+3) Set `MatterProxy Key Hint File` to a local text file
+
+Each non-empty line supports:
+
+```
+key=<32-hex> [session=<id>] [src=<node-id>]
+```
+
+Examples:
+
+```
+key=5EDED244E5532B3CDC23409DBAD052D2
+key=A9E011B1737C6D4B70E4C0A2FE660476 session=0xA3C2
+key=44D43C91D227F3BA0824C5D87CB81B33 session=41826 src=0x0000000000000001
+```
 
 #### Stock developer Encryption Keys
 

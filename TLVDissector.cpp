@@ -13,6 +13,7 @@
  */
 
 #include <stdio.h>
+#include <string.h>
 
 #include <glib.h>
 #include "config.h"
@@ -229,7 +230,7 @@ exit:
     return err;
 }
 
-// TODO: move this to utils
+// Local helper used by TLV textual rendering.
 static size_t AppendStringF(char *& strBuf, size_t& strBufSize, const char *format, ...)
 {
     va_list ap;
@@ -518,9 +519,16 @@ MATTER_ERROR TLVDissector::AddGenericTLVItem(proto_tree *tree, int hfindex, tvbu
     case kTLVType_FloatingPointNumber:
     {
         double val;
+        char valBuf[64];
         err = Get(val);
         SuccessOrExit(err);
-        AppendStringF(strBuf, strBufSize, "%g", val); // TODO: make sure this always has decimal point, to distinguish integers from floats.
+        g_snprintf(valBuf, sizeof(valBuf), "%.17g", val);
+        if (strchr(valBuf, '.') == NULL && strchr(valBuf, 'e') == NULL && strchr(valBuf, 'E') == NULL) {
+            AppendStringF(strBuf, strBufSize, "%s.0", valBuf);
+        }
+        else {
+            AppendStringF(strBuf, strBufSize, "%s", valBuf);
+        }
         break;
     }
     case kTLVType_UTF8String:
@@ -767,4 +775,3 @@ matter::TLV::TLVType TLVDissector::PopContainer()
         return kTLVType_NotSpecified;
     }
 }
-
