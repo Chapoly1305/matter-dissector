@@ -27,9 +27,10 @@ The Matter Wireshark dissector recognizes protocol opcodes for many of the curre
   - [X] Matter MessageCounterSync and KeyError messages
   - [X] Matter CASE / PASE
     * All session establishment messages
-    * Limited support for displaying Matter certificates
+    * Matter operational certificate field decode (NOC/ICAC/Root CA)
+    * CASE/PASE parameter tag-name decode (PBKDF, Sigma, attestation/CSR containers)
 - [X] Matter Echo Profile (all messages)
-- [ ] Interaction Model Protocol (all IM messages)
+- [X] Interaction Model Protocol (all IM messages)
     - [X] Command Request / Response
     - [X] Attribute Read
     - [X] Attribute Write
@@ -40,10 +41,16 @@ The Matter Wireshark dissector recognizes protocol opcodes for many of the curre
     - [X] Attribute ID -> Name
     - [X] Command ID -> Name
     - [X] Event ID -> Name
-- Cluster Support
-    - [X] User Directed Commissioning [UDC]
-    - [X] On/Off (path-level ID/name decode in IM)
-    ...
+- [X] IM generic payload decode for all Matter v1.5 clusters
+    - [X] Attribute payload generic TLV decode with struct/enum name mapping where available
+    - [X] Command payload generic TLV decode with request/response field-name mapping where available
+    - [X] Event payload generic TLV decode with field-name mapping where available
+- [X] Certificate and attestation payload deep decode in IM byte-string fields
+    - [X] `NOCValue` / `ICACValue` / `RootCACertificate`
+    - [X] `AttestationElements` / `NOCSRElements` / CSR decode
+    - [X] Certification Declaration CMS envelope + embedded content fields
+
+Detailed per-cluster completion status is auto-generated in `docs/CLUSTER_TODO.md`.
 ### Security Features
 
 The Matter Wireshark dissector contains a number of features that make debugging secure Matter interactions easier.  At the most basic level, the dissector supports automatic decryption of Matter messages using encryption keys that are manually entered by the user. This supports scenarios where one or both ends of a communication intentionally leak the keys for debugging purposes (e.g. via log messages). Encryption keys can be entered via the Matter preferences dialog, and persist across Wireshark sessions.
@@ -74,7 +81,7 @@ Installing the Wireshark plugin is as simple as copying the shared library file 
     cp matter-dissector.so ${HOME}/.local/lib/wireshark/plugins/4.6/epan
     chmod 700 ${HOME}/.local/lib/wireshark/plugins/4.6/epan/matter-dissector.so
 
-## Bulding the Matter Wireshark Plugin
+## Building the Matter Wireshark Plugin
 
 ### Build Wireshark
 Use Wireshark **release-4.6.3** for this workspace.

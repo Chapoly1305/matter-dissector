@@ -124,6 +124,8 @@ static int hf_Cert_Signature = -1;
 static int hf_Cert_Unknown = -1;
 
 static int hf_CertRef = -1;
+static int hf_CertRef_Subject = -1;
+static int hf_CertRef_PublicSessionId = -1;
 
 static int hf_ECDSASig_r = -1;
 static int hf_ECDSASig_s = -1;
@@ -452,11 +454,43 @@ AddCert(TLVDissector& tlvDissector, proto_tree *tree, tvbuff_t* tvb)
 static MATTER_ERROR
 AddCertRef(TLVDissector& tlvDissector, proto_tree *tree, tvbuff_t* tvb, int hfindex)
 {
-    MATTER_ERROR err;
+    MATTER_ERROR err = MATTER_NO_ERROR;
+    proto_tree *certRefTree = nullptr;
 
-    // TODO: implement proper cert ref dissector
+    VerifyOrExit(tlvDissector.GetType() == kTLVType_Structure, err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+    err = tlvDissector.AddSubTreeItem(tree, hfindex, ett_CertRef, tvb, certRefTree);
+    SuccessOrExit(err);
 
-    err = tlvDissector.AddGenericTLVItem(tree, hfindex, tvb, true);
+    err = tlvDissector.EnterContainer();
+    SuccessOrExit(err);
+
+    while (true) {
+        err = tlvDissector.Next();
+        if (err == MATTER_END_OF_TLV)
+            break;
+        SuccessOrExit(err);
+
+        const uint64_t tag = tlvDissector.GetTag();
+        const TLVType type = tlvDissector.GetType();
+        VerifyOrExit(IsContextTag(tag), err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+
+        switch (TagNumFromTag(tag)) {
+        case kTag_MatterCertificateRef_Subject:
+            VerifyOrExit(type == kTLVType_Path || type == kTLVType_Structure, err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+            err = AddCertDN(tlvDissector, certRefTree, tvb, hf_CertRef_Subject, hf_Cert_SubjectAttribute);
+            break;
+        case kTag_MatterCertificateRef_PublicSessionId:
+            VerifyOrExit(type == kTLVType_ByteString, err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
+            err = tlvDissector.AddTypedItem(certRefTree, hf_CertRef_PublicSessionId, tvb);
+            break;
+        default:
+            err = tlvDissector.AddGenericTLVItem(certRefTree, hf_Cert_Unknown, tvb, false);
+            break;
+        }
+        SuccessOrExit(err);
+    }
+
+    err = tlvDissector.ExitContainer();
     SuccessOrExit(err);
 
 exit:
@@ -519,7 +553,7 @@ AddCertInfo(proto_tree *tree, tvbuff_t *tvb, packet_info *pinfo, int certInfoOff
             break;
         case kTag_CASECertificateInfo_TrustAnchors:
             VerifyOrExit(type == kTLVType_Path, err = MATTER_ERROR_UNEXPECTED_TLV_ELEMENT);
-            err = tlvDissector.AddListItem(certInfoTree, hf_CertInfo_RelatedCertsList, ett_CertInfo_RelatedCertsList, tvb, AddCertRef);
+            err = tlvDissector.AddListItem(certInfoTree, hf_CertInfo_TrustAnchorsList, ett_CertInfo_TrustAnchorsList, tvb, AddCertRef);
             SuccessOrExit(err);
             break;
         default:
@@ -1072,7 +1106,15 @@ proto_register_matter_security(void)
 
         { &hf_CertRef,
             { "Certificate Reference", "matter.cert_ref",
-            FT_STRING, BASE_NONE, NULL, 0x0, NULL, HFILL }
+            FT_NONE, BASE_NONE, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_CertRef_Subject,
+            { "Subject", "matter.cert_ref.subject",
+            FT_NONE, BASE_NONE, NULL, 0x0, NULL, HFILL }
+        },
+        { &hf_CertRef_PublicSessionId,
+            { "Public Key Session ID", "matter.cert_ref.public_session_id",
+            FT_BYTES, SEP_SPACE, NULL, 0x0, NULL, HFILL }
         },
 
 

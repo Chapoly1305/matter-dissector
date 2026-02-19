@@ -559,6 +559,7 @@ DissectMatter(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, void *dat
     MatterMessageInfo msgInfo;
     tvbuff_t *unencMsgTVB, *payloadTVB;
     int parsePoint = 0, payloadOffset, profileDissectorRes;
+    uint16_t dispatchProtocolId = 0;
     uint32_t nodeIdLen;
 
     col_set_str(pinfo->cinfo, COL_PROTOCOL, "Matter");
@@ -690,12 +691,21 @@ DissectMatter(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, void *dat
         msgInfo.msgProtocolId = tvb_get_letohs(unencMsgTVB, parsePoint);
         msgInfo.msgProfileName = GetProtocolName(msgInfo.msgProtocolId);
         parsePoint += 2;
+        dispatchProtocolId = msgInfo.msgProtocolId;
+        if (msgInfo.msgProfileName == NULL) {
+            uint16_t swappedProtocolId = static_cast<uint16_t>((msgInfo.msgProtocolId << 8) | (msgInfo.msgProtocolId >> 8));
+            const char *swappedName = GetProtocolName(swappedProtocolId);
+            if (swappedName != NULL) {
+                dispatchProtocolId = swappedProtocolId;
+                msgInfo.msgProfileName = swappedName;
+            }
+        }
 
         if ((msgInfo.exchHeader & kMatterExchangeFlag_VendorProtocol) != 0) {
             msgInfo.msgProtocolVendorId = tvb_get_letohs(unencMsgTVB, parsePoint);
             parsePoint += 2;
         }
-        msgInfo.msgTypeName = GetMessageName(msgInfo.msgProtocolId, msgInfo.msgType);
+        msgInfo.msgTypeName = GetMessageName(dispatchProtocolId, msgInfo.msgType);
 
         // Back up and add annotations
         parsePoint = 1;
@@ -780,7 +790,7 @@ DissectMatter(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, void *dat
 
         payloadTVB = tvb_new_subset_length(unencMsgTVB, payloadOffset, msgInfo.payloadLen);
 
-        profileDissectorRes = dissector_try_uint_new(matter_subdissector_table, msgInfo.msgProtocolId, payloadTVB, pinfo, tree, false, &msgInfo);
+        profileDissectorRes = dissector_try_uint_new(matter_subdissector_table, dispatchProtocolId, payloadTVB, pinfo, tree, false, &msgInfo);
 
         if (profileDissectorRes == 0) {
             AddMessageTypeToInfoColumn(pinfo, msgInfo);

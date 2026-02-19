@@ -58,6 +58,7 @@ MatterMessageRecord* MatterMessageTracker::FindOrCreateMessageRecord(tvbuff_t* t
         msgRec = wmem_new(wmem_file_scope(), MatterMessageRecord);
         memset(msgRec, 0, sizeof(*msgRec));
         msgRec->frameNum = pinfo->fd->num;
+        msgRec->isInitiator = ((msgInfo.exchHeader & kMatterExchangeFlag_Initiator) != 0);
 
         // Compute a fingerprint for the message that can be used to quickly compare its contents.
         msgRec->fingerprint = ComputeMessageFingerprint(tvb, msgInfo);
@@ -153,11 +154,27 @@ void MatterMessageTracker::FindAckedMessages(packet_info *pinfo, MatterMessageRe
 
 MatterMessageRecord *MatterMessageTracker::FindStartOfExchange(MatterMessageRecord *msgRec)
 {
-    // TODO: improve this to detect exchange boundaries in cases where exchange ids are reused.
+    MatterMessageRecord *firstInChain = msgRec;
 
-    for (; msgRec->prevByExchange != NULL; msgRec = msgRec->prevByExchange);
+    // Use the nearest previous initiator-side message as the exchange start candidate.
+    // This handles exchange-id reuse better than always returning the oldest message in the chain.
+    for (MatterMessageRecord *p = msgRec; p != NULL; p = p->prevByExchange) {
+        firstInChain = p;
 
-    return msgRec;
+        if (p->isInitiator) {
+            // Fold contiguous initiator retransmissions with identical fingerprint into one start frame.
+            MatterMessageRecord *start = p;
+            while (start->prevByExchange != NULL &&
+                   start->prevByExchange->isInitiator &&
+                   start->prevByExchange->fingerprint == start->fingerprint) {
+                start = start->prevByExchange;
+            }
+            return start;
+        }
+    }
+
+    // Fallback for incomplete/truncated captures where no initiator message is present.
+    return firstInChain;
 }
 
 void MatterMessageTracker::InitTables()

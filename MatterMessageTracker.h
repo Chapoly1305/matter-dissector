@@ -18,6 +18,7 @@ class MatterMessageRecord
 public:
     uint32_t frameNum;
     uint32_t fingerprint;
+    bool isInitiator;
     uint64_t imSubscription;
     MatterMessageRecord *ackedByMsgRec;
     MatterMessageRecord *nextByMsgCntr;
