@@ -38,6 +38,7 @@
 #include <epan/crc32-tvb.h>
 #include <epan/prefs.h>
 #include <epan/uat.h>
+#include <epan/secrets.h>
 #include <wsutil/report_message.h>
 #include <wsutil/filesystem.h>
 
@@ -123,6 +124,7 @@ static dissector_table_t matter_subdissector_table;
 
 static bool pref_ShowNodeIds = true;
 static const char *pref_MatterProxyKeyHintFile = NULL;
+static const uint32_t kSecretsTypeMatterProxyHints = 0x4D50524B; // "MPRK"
 
 struct MatterProxyHintKey
 {
@@ -133,7 +135,8 @@ struct MatterProxyHintKey
     unsigned char key[kDataEncKeyLength_AES128CCM] = { 0 };
 };
 
-static std::vector<MatterProxyHintKey> sMatterProxyHintKeys;
+static std::vector<MatterProxyHintKey> sMatterProxyHintKeysFromFile;
+static std::vector<MatterProxyHintKey> sMatterProxyHintKeysFromDSB;
 static std::string sMatterProxyHintPath;
 static time_t sMatterProxyHintMTime = 0;
 
@@ -268,11 +271,46 @@ ParseMatterProxyHintLine(const std::string &lineRaw, MatterProxyHintKey &out)
 }
 
 static void
+PreloadHintKeyBySessionId(const MatterProxyHintKey &hint)
+{
+    if (!hint.hasKeyId) {
+        return;
+    }
+    MessageEncryptionKey keyData;
+    memset(&keyData, 0, sizeof(keyData));
+    keyData.keyId = hint.keyId;
+    keyData.sessionType = matter::kMatterEncryptionType_AES128CCM;
+    keyData.dataEncKey = const_cast<unsigned char *>(hint.key);
+    keyData.dataEncKeyLen = kDataEncKeyLength_AES128CCM;
+    keyData.srcNodeId = hint.hasSrcNodeId ? hint.srcNodeId : 0;
+    MessageEncryptionKeyTable::AddKey(keyData);
+}
+
+static std::vector<MatterProxyHintKey>
+ParseMatterProxyHintBlob(const uint8_t *data, size_t dataLen)
+{
+    std::vector<MatterProxyHintKey> parsed;
+    if (data == nullptr || dataLen == 0) {
+        return parsed;
+    }
+    std::string all(reinterpret_cast<const char *>(data), dataLen);
+    std::istringstream iss(all);
+    std::string line;
+    while (std::getline(iss, line)) {
+        MatterProxyHintKey hint;
+        if (ParseMatterProxyHintLine(line, hint)) {
+            parsed.push_back(hint);
+        }
+    }
+    return parsed;
+}
+
+static void
 RefreshMatterProxyHintKeys(void)
 {
     const std::string path = TrimStr(pref_MatterProxyKeyHintFile ? pref_MatterProxyKeyHintFile : "");
     if (path.empty()) {
-        sMatterProxyHintKeys.clear();
+        sMatterProxyHintKeysFromFile.clear();
         sMatterProxyHintPath.clear();
         sMatterProxyHintMTime = 0;
         return;
@@ -280,7 +318,7 @@ RefreshMatterProxyHintKeys(void)
 
     struct stat fs;
     if (stat(path.c_str(), &fs) != 0) {
-        sMatterProxyHintKeys.clear();
+        sMatterProxyHintKeysFromFile.clear();
         sMatterProxyHintPath = path;
         sMatterProxyHintMTime = 0;
         return;
@@ -303,23 +341,23 @@ RefreshMatterProxyHintKeys(void)
         fclose(fp);
     }
 
-    sMatterProxyHintKeys.swap(parsed);
+    sMatterProxyHintKeysFromFile.swap(parsed);
     sMatterProxyHintPath = path;
     sMatterProxyHintMTime = fs.st_mtime;
 
     // Pre-load key-id specific hints into the main key table for fast lookup.
-    for (const auto &hint : sMatterProxyHintKeys) {
-        if (!hint.hasKeyId) {
-            continue;
-        }
-        MessageEncryptionKey keyData;
-        memset(&keyData, 0, sizeof(keyData));
-        keyData.keyId = hint.keyId;
-        keyData.sessionType = matter::kMatterEncryptionType_AES128CCM;
-        keyData.dataEncKey = const_cast<unsigned char *>(hint.key);
-        keyData.dataEncKeyLen = kDataEncKeyLength_AES128CCM;
-        keyData.srcNodeId = hint.hasSrcNodeId ? hint.srcNodeId : 0;
-        MessageEncryptionKeyTable::AddKey(keyData);
+    for (const auto &hint : sMatterProxyHintKeysFromFile) {
+        PreloadHintKeyBySessionId(hint);
+    }
+}
+
+static void
+MatterProxyHintSecretsBlockCallback(const void *secrets, unsigned size)
+{
+    std::vector<MatterProxyHintKey> parsed = ParseMatterProxyHintBlob(reinterpret_cast<const uint8_t *>(secrets), size);
+    sMatterProxyHintKeysFromDSB.swap(parsed);
+    for (const auto &hint : sMatterProxyHintKeysFromDSB) {
+        PreloadHintKeyBySessionId(hint);
     }
 }
 
@@ -407,27 +445,36 @@ TryDecryptMessage(tvbuff_t *tvb, int encDataOffset, packet_info *pinfo, const Ma
         }
 
         // If still no key worked, try matterproxy hint keys loaded from file preference.
-        if (!success && !sMatterProxyHintKeys.empty()) {
+        if (!success && (!sMatterProxyHintKeysFromFile.empty() || !sMatterProxyHintKeysFromDSB.empty())) {
             MessageEncryptionKey hintKey;
-            for (const auto &hint : sMatterProxyHintKeys) {
-                if (hint.hasKeyId && hint.keyId != msgInfo.sessionId) {
-                    continue;
-                }
+            const std::vector<const std::vector<MatterProxyHintKey> *> hintSources = {
+                &sMatterProxyHintKeysFromFile,
+                &sMatterProxyHintKeysFromDSB,
+            };
+            for (const auto *hintList : hintSources) {
+                for (const auto &hint : *hintList) {
+                    if (hint.hasKeyId && hint.keyId != msgInfo.sessionId) {
+                        continue;
+                    }
 
-                memset(&hintKey, 0, sizeof(hintKey));
-                hintKey.keyId = msgInfo.sessionId;
-                hintKey.sessionType = matter::kMatterEncryptionType_AES128CCM;
-                hintKey.dataEncKey = const_cast<unsigned char *>(hint.key);
-                hintKey.dataEncKeyLen = kDataEncKeyLength_AES128CCM;
-                hintKey.srcNodeId = hint.hasSrcNodeId ? hint.srcNodeId : msgInfo.srcNodeId;
+                    memset(&hintKey, 0, sizeof(hintKey));
+                    hintKey.keyId = msgInfo.sessionId;
+                    hintKey.sessionType = matter::kMatterEncryptionType_AES128CCM;
+                    hintKey.dataEncKey = const_cast<unsigned char *>(hint.key);
+                    hintKey.dataEncKeyLen = kDataEncKeyLength_AES128CCM;
+                    hintKey.srcNodeId = hint.hasSrcNodeId ? hint.srcNodeId : msgInfo.srcNodeId;
 
-                success = TryDecryptMessage_AES128CCM(encData, unencData, dataLen, aadData, encDataOffset, pinfo, msgInfo, hintKey);
-                if (!success && msgInfo.srcNodeId == 0 && hint.hasSrcNodeId) {
-                    msgInfoCopy.srcNodeId = hint.srcNodeId;
-                    success = TryDecryptMessage_AES128CCM(encData, unencData, dataLen, aadData, encDataOffset, pinfo, msgInfoCopy, hintKey);
+                    success = TryDecryptMessage_AES128CCM(encData, unencData, dataLen, aadData, encDataOffset, pinfo, msgInfo, hintKey);
+                    if (!success && msgInfo.srcNodeId == 0 && hint.hasSrcNodeId) {
+                        msgInfoCopy.srcNodeId = hint.srcNodeId;
+                        success = TryDecryptMessage_AES128CCM(encData, unencData, dataLen, aadData, encDataOffset, pinfo, msgInfoCopy, hintKey);
+                    }
+                    if (success) {
+                        MessageEncryptionKeyTable::AddKey(hintKey);
+                        break;
+                    }
                 }
                 if (success) {
-                    MessageEncryptionKeyTable::AddKey(hintKey);
                     break;
                 }
             }
@@ -1006,6 +1053,7 @@ proto_reg_handoff_matter(void)
 {
     static dissector_handle_t matterUDPHandle;
     static dissector_handle_t matterTCPHandle;
+    static bool secretsRegistered = false;
 
     ip_handle = find_dissector("ip");
 
@@ -1014,6 +1062,11 @@ proto_reg_handoff_matter(void)
 
     matterTCPHandle = create_dissector_handle(DissectMatterTCP, proto_matter);
     dissector_add_uint("tcp.port", MATTER_PORT, matterTCPHandle);
+
+    if (!secretsRegistered) {
+        secrets_register_type(kSecretsTypeMatterProxyHints, MatterProxyHintSecretsBlockCallback);
+        secretsRegistered = true;
+    }
 
     InitMatterDissector();
 }
