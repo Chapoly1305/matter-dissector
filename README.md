@@ -61,13 +61,13 @@ The Matter Wireshark dissector is currently a work in progress in experimental s
 As such, users should be aware of certain limitations:
 
 * __TCP and UDP only__: The dissector is only capable of decoding Matter messages that are conveyed via TCP or UDP (IPv6 and IPv4).  Matter messages communicated over BLE are not supported.
-* __Linux x86_64 only__: At the present time the Matter Wireshark dissector has been tested on Linux x86_64 only.
+* __Linux x86_64 and macOS aarch64__: The dissector has been tested on Linux x86_64 and macOS Apple Silicon.
 
 Users should also be aware that the Matter dissector may have bugs that may cause Wireshark to crash, especially when encountering combinations of Matter protocols and clusters with which the dissector has not yet been tested.  So if you are trying to capture a network protocol error that only occurs once every month, you probably should disable the Matter dissector.
 
 
 ## Installation
-The current version of the Matter Wireshark plugin in this workspace targets **Wireshark 4.6.3** on Linux.
+The current version of the Matter Wireshark plugin in this workspace targets **Wireshark 4.6.x** on Linux and macOS.
 Support for the old 4.2 workspace has been dropped in this branch.
 
 ### Matter Baseline
@@ -77,9 +77,16 @@ Current baseline used during this adaptation: `v1.5-branch@d0538c5d`.
 
 Installing the Wireshark plugin is as simple as copying the shared library file into your local plugins directory:
 
-    mkdir -p ${HOME}/.local/lib/wireshark/plugins/4.6/epan
-    cp matter-dissector.so ${HOME}/.local/lib/wireshark/plugins/4.6/epan
-    chmod 700 ${HOME}/.local/lib/wireshark/plugins/4.6/epan/matter-dissector.so
+    mkdir -p ${HOME}/.local/lib/wireshark/plugins/4-6/epan
+    cp matter-dissector.so ${HOME}/.local/lib/wireshark/plugins/4-6/epan
+
+Note: The plugin must be placed in the `epan` subdirectory. Wireshark 4.6 scans
+subdirectories (`epan/`, `codecs/`, `wiretap/`) — `.so` files placed directly in
+the `4-6/` root directory are silently ignored.
+
+On macOS, the personal plugins path is the same. If Wireshark is installed as an
+app bundle at `/Applications/Wireshark.app/`, the plugin search path is still
+`~/.local/lib/wireshark/plugins/4-6/epan/` (verify with `tshark -G folders | grep Plugins`).
 
 ## Building the Matter Wireshark Plugin
 

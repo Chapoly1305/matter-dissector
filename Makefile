@@ -73,11 +73,7 @@ LDFLAGS += -Wl,-soname=$(PLUGIN_NAME).so -Wl,-Map -Wl,$(PLUGIN_NAME).map -Wl,--c
 endif
 
 WIRESHARK_PLUGIN_VER ?= 4-6
-ifeq ($(UNAME_S),Darwin)
-INSTALL_PLUGIN_DIR ?= $(WIRESHARK_BUILD_DIR)/run/Wireshark.app/Contents/PlugIns/wireshark/$(WIRESHARK_PLUGIN_VER)/epan
-else
-INSTALL_PLUGIN_DIR ?= ~/.local/lib/wireshark/plugins/$(WIRESHARK_PLUGIN_VER)/epan
-endif
+INSTALL_PLUGIN_DIR ?= $(HOME)/.local/lib/wireshark/plugins/$(WIRESHARK_PLUGIN_VER)/epan
 
 DISSECTOR_SRCS := packet-matter.cpp packet-matter-decrypt.cpp packet-matter-echo.cpp packet-matter-common.cpp packet-matter-im.cpp packet-matter-security.cpp packet-matter-udc.cpp
 SRCS := $(DISSECTOR_SRCS) $(MATTER_SRCS) TLVDissector.cpp MatterMessageTracker.cpp MessageEncryptionKey.cpp UserEncryptionKeyPrefs.cpp UserNodeIdPrefs.cpp HKDF.c
